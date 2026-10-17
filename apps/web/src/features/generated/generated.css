@@ -1,0 +1,234 @@
+.wb-schema-form,
+.wb-schema-received,
+.wb-trusted-surface {
+  color: var(--fg, #292724);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.wb-schema-form {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--border, #e6e3dc);
+  border-radius: 12px;
+}
+.wb-schema-form h3,
+.wb-trusted-surface h3 {
+  font-size: 14px;
+  font-weight: 550;
+  margin: 0 0 10px;
+}
+.wb-trusted-surface h2 {
+  font-size: 17px;
+  font-weight: 550;
+  margin: 0 0 12px;
+}
+.wb-generated-note {
+  color: var(--muted, #817c74);
+  font-size: 12px;
+  margin: 6px 0;
+}
+.wb-generated-error {
+  color: var(--danger, #b4483d);
+  font-size: 12px;
+  margin-top: 6px;
+}
+.wb-schema-field {
+  display: grid;
+  gap: 7px;
+}
+.wb-schema-field > label,
+.wb-schema-field legend {
+  font-weight: 500;
+}
+.wb-schema-field fieldset {
+  border: 1px solid var(--border, #e6e3dc);
+  padding: 10px 12px;
+  border-radius: 8px;
+  min-width: 0;
+}
+.wb-schema-field legend {
+  padding: 0 4px;
+}
+.wb-schema-choice {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  margin: 7px 0;
+}
+.wb-schema-choice input {
+  width: auto;
+  margin-top: 5px;
+}
+.wb-schema-form input:not([type='checkbox']),
+.wb-schema-form select,
+.wb-surface-table > input {
+  width: 100%;
+  border: 1px solid var(--border, #e6e3dc);
+  background: var(--surface, #fffefa);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: inherit;
+}
+.wb-generated-actions {
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.wb-generated-actions button,
+.wb-managed-file button {
+  border: 1px solid var(--border, #e6e3dc);
+  background: var(--surface, #fffefa);
+  padding: 8px 11px;
+  border-radius: 8px;
+  color: inherit;
+  font-size: 12px;
+}
+.wb-generated-actions button:first-child {
+  background: var(--fg, #292724);
+  color: var(--bg, #faf9f6);
+}
+.wb-generated-actions button:disabled,
+.wb-managed-file button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.wb-schema-form :focus-visible,
+.wb-trusted-surface :focus-visible {
+  outline: 2px solid var(--ring, #c18168);
+  outline-offset: 3px;
+}
+.wb-generated-fallback {
+  background: var(--bg, #faf9f6);
+  border: 1px solid var(--border, #e6e3dc);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 10px 0;
+}
+.wb-generated-fallback summary,
+.wb-trusted-surface summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.wb-generated-fallback pre,
+.wb-schema-received pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 11px;
+}
+.wb-trusted-surface {
+  margin: 18px 0;
+}
+.wb-trusted-surface header {
+  margin-bottom: 16px;
+}
+.wb-surface-card {
+  padding: 16px;
+  border: 1px solid var(--border, #e6e3dc);
+  background: var(--surface, #fffefa);
+  border-radius: 10px;
+}
+.wb-surface-column {
+  display: grid;
+  gap: 14px;
+}
+.wb-surface-row {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.wb-surface-row > h3 {
+  flex-basis: 100%;
+}
+.wb-surface-row > div {
+  flex: 1 1 210px;
+  min-width: 0;
+}
+.wb-surface-text {
+  white-space: pre-wrap;
+  margin: 0;
+}
+.wb-surface-list {
+  list-style: disc;
+  padding-left: 20px;
+}
+.wb-surface-details {
+  border: 1px solid var(--border, #e6e3dc);
+  border-radius: 8px;
+  padding: 12px;
+}
+.wb-surface-details > summary {
+  margin-bottom: 9px;
+}
+.wb-surface-table {
+  margin: 10px 0;
+}
+.wb-surface-table > label {
+  font-size: 12px;
+  display: block;
+  margin: 6px 0;
+}
+.wb-surface-table-scroll {
+  overflow: auto;
+  max-height: 440px;
+  border: 1px solid var(--border, #e6e3dc);
+  border-radius: 8px;
+}
+.wb-surface-table table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  text-align: left;
+}
+.wb-surface-table th,
+.wb-surface-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border, #e6e3dc);
+  vertical-align: top;
+  min-width: 100px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.wb-surface-table th {
+  background: var(--surface, #fffefa);
+  position: sticky;
+  top: 0;
+  font-weight: 550;
+}
+.wb-surface-figure {
+  margin: 12px 0;
+}
+.wb-surface-chart {
+  height: 300px;
+  width: 100%;
+}
+.wb-surface-sources {
+  margin-top: 20px;
+  border-top: 1px solid var(--border, #e6e3dc);
+  padding-top: 12px;
+  font-size: 11px;
+}
+.wb-surface-sources li {
+  margin: 10px 0;
+}
+.wb-surface-sources small,
+.wb-managed-file small {
+  display: block;
+  color: var(--muted, #817c74);
+  font-size: 11px;
+}
+.wb-generated-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

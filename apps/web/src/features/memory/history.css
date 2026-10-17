@@ -1,0 +1,36 @@
+.memory-history {
+  display: grid;
+  gap: 15px;
+}
+.memory-history > label {
+  display: grid;
+  gap: 9px;
+  font-size: 12px;
+}
+.memory-history > .checkbox-label {
+  display: flex;
+}
+.memory-history h3 {
+  font-size: 14px;
+  font-weight: 550;
+}
+.memory-history pre {
+  max-height: 330px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.8;
+  padding: 12px;
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.memory-history .page-note,
+.memory-history dd {
+  overflow-wrap: anywhere;
+}
+.memory-history-message {
+  font-size: 12px;
+  line-height: 1.8;
+}

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+package-lock.json
+*.tsbuildinfo
+openapi.json
+src/api/schema.d.ts

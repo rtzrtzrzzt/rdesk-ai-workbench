@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "deployment_id": "qwen38-flash-next-nvfp4-s0",
+  "model_path": "models/nvidia/Qwen3.8-Flash-Next-NVFP4",
+  "model_revision": "fc694b54fb0174e0913e6adf86691ef85a4ead47",
+  "asset_bytes_previously_verified": 132734506847,
+  "engine": "sglang",
+  "engine_version": "0.5.21",
+  "engine_source_commit": "e00930c5489053f26d86b179cee0d087f846acbb",
+  "target_architecture": "aarch64",
+  "target_gpu": "NVIDIA GB10",
+  "driver_baseline": "580.178.04",
+  "cuda_toolkit_baseline": "13.0.3",
+  "quantization": "modelopt_mixed (auto-detected from hf_quant_config.json)",
+  "moe_runner_backend": "flashinfer_cutlass",
+  "offload_backend": "file",
+  "credential_ref": null,
+  "python": ".runtime/model-env/bin/python",
+  "host": "127.0.0.1",
+  "port": 30000,
+  "served_model_name": "Qwen3.8-Flash-Next",
+  "context_length": 32768,
+  "max_total_tokens": 368256,
+  "max_running_requests": 1,
+  "chunked_prefill_size": 1024,
+  "mem_fraction_static": 0.78,
+  "ple_rss_budget_gib": 4,
+  "minimum_available_gib": 8,
+  "startup_minimum_available_gib": 105,
+  "startup_free_disk_gib": 80,
+  "mtp": false,
+  "ple_directory": ".local/model/ple/fc694b54fb0174e0913e6adf86691ef85a4ead47/generation-20261017T140904331116Z",
+  "ple_generation_root": ".local/model/ple/fc694b54fb0174e0913e6adf86691ef85a4ead47",
+  "ple_generation_limit": 2,
+  "evidence_directory": ".local/model/evidence",
+  "sources": [
+    "https://github.com/sgl-project/sglang/tree/v0.5.21",
+    "https://github.com/sgl-project/sglang/pull/37068",
+    "https://github.com/sgl-project/sglang/pull/38121"
+  ],
+  "capabilities": {
+    "text": {
+      "support": "supported",
+      "evidence_status": "verified",
+      "evidence_source": ".local/model/evidence/20261017T122217113321Z-text/result.json",
+      "checked_at": "2026-10-17T12:22:19.051728+00:00",
+      "deployment_revision": "fc694b54fb0174e0913e6adf86691ef85a4ead47"
+    },
+    "stream": {
+      "support": "supported",
+      "evidence_status": "verified",
+      "evidence_source": ".local/model/evidence/20261017T122233961595Z-stream/result.json",
+      "checked_at": "2026-10-17T12:22:35.060902+00:00",
+      "deployment_revision": "fc694b54fb0174e0913e6adf86691ef85a4ead47"
+    },
+    "tool_calling": {
+      "support": "supported",
+      "evidence_status": "verified",
+      "evidence_source": ".local/model/evidence/20261017T122240135119Z-tools/result.json",
+      "checked_at": "2026-10-17T12:22:56.782189+00:00",
+      "deployment_revision": "fc694b54fb0174e0913e6adf86691ef85a4ead47"
+    },
+    "image": {
+      "support": "supported",
+      "evidence_status": "verified",
+      "evidence_source": ".local/model/evidence/20261017T122303379521Z-image/result.json",
+      "checked_at": "2026-10-17T12:23:10.136896+00:00",
+      "deployment_revision": "fc694b54fb0174e0913e6adf86691ef85a4ead47"
+    },
+    "video": {
+      "support": "unknown",
+      "evidence_status": null,
+      "evidence_source": null,
+      "checked_at": null,
+      "deployment_revision": "fc694b54fb0174e0913e6adf86691ef85a4ead47"
+    },
+    "prefix_cache": {
+      "support": "supported",
+      "evidence_status": "verified",
+      "evidence_source": ".local/model/evidence/20261017T123948636746Z-prefix-cache/measurement.json",
+      "checked_at": "2026-10-17T12:39:51.543736+00:00",
+      "deployment_revision": "fc694b54fb0174e0913e6adf86691ef85a4ead47"
+    }
+  }
+}

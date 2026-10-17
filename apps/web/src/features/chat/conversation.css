@@ -1,0 +1,137 @@
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.composer-mode-row {
+  margin-bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.composer-mode-row .segmented {
+  padding: 2px;
+}
+.composer-mode-row .segmented button {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+.composer-mode-row > p {
+  width: 100%;
+}
+.composer-wrap {
+  width: 100%;
+}
+.composer-tools {
+  min-width: 0;
+}
+.composer-tools .icon-button {
+  flex-shrink: 0;
+}
+.run-panel {
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+.run-panel > details {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.run-panel > details > summary {
+  padding: 13px 0;
+}
+.run-panel > details > summary > svg {
+  margin-left: auto;
+  color: var(--muted);
+}
+.run-panel > details[open] > summary > svg {
+  transform: rotate(180deg);
+}
+.run-panel-body {
+  padding: 0 0 18px;
+}
+.run-visible-error {
+  margin: 12px 0;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.run-panel > .interaction-card {
+  margin: 16px 0;
+}
+.interaction-history {
+  margin: 14px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.interaction-history > summary {
+  padding: 8px 0;
+  cursor: pointer;
+}
+.interaction-history .interaction-card {
+  margin: 12px 0;
+  color: var(--fg);
+}
+.child-decisions {
+  margin-top: 14px;
+}
+.child-decisions .interaction-card {
+  margin-top: 10px;
+}
+.approval-card .approval-arguments {
+  display: block;
+  margin: 0;
+}
+.approval-arguments > div {
+  margin: 8px 0;
+}
+.approval-card .approval-arguments dt {
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.approval-card .approval-arguments dd {
+  margin: 0;
+}
+.approval-arguments pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.approval-technical {
+  margin-top: 8px;
+}
+.run-surface-meta {
+  display: block;
+  color: var(--muted);
+  margin-top: 12px;
+}
+.run-surface-meta > summary {
+  cursor: pointer;
+}
+.run-surface-meta > span,
+.run-surface-meta > small {
+  display: block;
+  margin: 8px 0;
+}
+.task-options {
+  max-height: 68dvh;
+  overflow-y: auto;
+  padding: 4px;
+}
+@media (max-width: 700px) {
+  .model-select-label {
+    min-width: 0;
+  }
+  .model-select-label select {
+    max-width: min(170px, 35vw);
+  }
+  .composer-mode-row .segmented button {
+    padding: 6px 8px;
+  }
+}

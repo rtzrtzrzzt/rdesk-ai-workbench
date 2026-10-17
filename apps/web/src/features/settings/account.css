@@ -1,0 +1,36 @@
+.settings-account {
+  padding: 26px 0;
+  border-bottom: 1px solid var(--border);
+}
+.settings-account h2 {
+  font-size: 14px;
+  font-weight: 550;
+}
+.settings-account details {
+  margin: 16px 0;
+}
+.settings-account summary {
+  font-size: 12px;
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+.account-password-fields {
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 14px;
+}
+.account-password-fields label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.account-password-receipt {
+  font-size: 12px;
+  line-height: 1.8;
+  margin-top: 18px;
+  overflow-wrap: anywhere;
+}
+.account-password-receipt small {
+  color: var(--muted);
+}

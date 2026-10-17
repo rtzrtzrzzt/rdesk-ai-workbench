@@ -1,0 +1,90 @@
+.settings-diagnostics {
+  margin: 22px 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  min-width: 0;
+}
+.settings-diagnostics > summary {
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.diagnostics-content,
+.diagnostics-snapshot {
+  display: grid;
+  gap: 16px;
+}
+.diagnostics-content {
+  margin-top: 18px;
+}
+.diagnostics-overview,
+.diagnostics-queues {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+  gap: 14px;
+}
+.diagnostics-overview article,
+.diagnostics-queues article {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  min-width: 0;
+}
+.diagnostics-snapshot h3 {
+  font-size: 12px;
+  margin: 0 0 10px;
+}
+.diagnostics-overview strong {
+  font-weight: 500;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.diagnostics-overview p {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 8px 0 0;
+}
+.diagnostics-snapshot > details > summary {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 0;
+}
+.diagnostics-snapshot > details[open] > summary {
+  margin-bottom: 14px;
+}
+.diagnostics-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.diagnostics-table table {
+  border-collapse: collapse;
+  width: 100%;
+  text-align: left;
+  font-size: 11px;
+}
+.diagnostics-table th,
+.diagnostics-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.diagnostics-table th {
+  font-weight: 500;
+}
+.diagnostics-reading {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.diagnostics-reading small {
+  color: var(--muted);
+}
+.diagnostics-count {
+  display: inline-block;
+  margin-right: 10px;
+}
+.diagnostics-snapshot dd {
+  overflow-wrap: anywhere;
+}

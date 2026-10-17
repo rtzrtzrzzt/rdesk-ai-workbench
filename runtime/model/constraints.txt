@@ -1,0 +1,9 @@
+# Keep build tools/bindings aligned with this host's CUDA 13.0.3 / R580 driver.
+# These exact versions are published on the default PyPI source.
+cuda-python==13.0.3
+cuda-bindings==13.0.3
+nvidia-cuda-nvcc==13.0.88
+nvidia-cuda-crt==13.0.88
+nvidia-nvvm==13.0.88
+nvidia-cuda-nvrtc==13.0.88
+nvidia-cuda-runtime==13.0.96

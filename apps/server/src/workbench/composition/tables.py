@@ -1,0 +1,82 @@
+"""Import each module's table declarations for migrations, without runtime side effects."""
+
+from workbench.modules.automation.domain import (
+    AutomationAction,
+    AutomationPolicy,
+    AutomationSession,
+    DesktopWriterLease,
+)
+from workbench.modules.collaboration.domain import AgentMessage, AgentSlot
+from workbench.modules.conversations import Message, Thread
+from workbench.modules.files.domain import Artifact, Upload
+from workbench.modules.identity import AccountCommandReceipt, AuthSession, LoginThrottle, User
+from workbench.modules.interactions import Approval, Question
+from workbench.modules.mcp.host_domain import MCPConnection, MCPSnapshot, ToolExchange
+from workbench.modules.memory.domain import (
+    MemoryDocument,
+    MemoryProposal,
+    MemoryRevision,
+    MemoryScope,
+    MemoryTombstone,
+    MemoryWriteJournal,
+)
+from workbench.modules.models.domain import ModelConnection, ModelRevision
+from workbench.modules.preferences.domain import RuntimeDefaults, WorkspaceRuntimeDefaults
+from workbench.modules.processes.domain import CommandExecution
+from workbench.modules.runs.domain import (
+    Attempt,
+    ClientRequest,
+    Job,
+    Run,
+    RunEvent,
+    Step,
+    WorkerHeartbeat,
+)
+from workbench.modules.search.domain import SearchConnection
+from workbench.modules.tools.domain import Operation
+from workbench.modules.usage import UsageRecord
+from workbench.modules.workspaces import Workspace
+
+__all__ = [
+    "AutomationAction",
+    "AutomationPolicy",
+    "AutomationSession",
+    "DesktopWriterLease",
+    "User",
+    "MCPConnection",
+    "MCPSnapshot",
+    "ToolExchange",
+    "RuntimeDefaults",
+    "WorkspaceRuntimeDefaults",
+    "CommandExecution",
+    "AgentSlot",
+    "AgentMessage",
+    "AuthSession",
+    "AccountCommandReceipt",
+    "LoginThrottle",
+    "Workspace",
+    "ModelConnection",
+    "ModelRevision",
+    "Thread",
+    "Message",
+    "Run",
+    "Job",
+    "RunEvent",
+    "ClientRequest",
+    "Step",
+    "Attempt",
+    "WorkerHeartbeat",
+    "Question",
+    "Approval",
+    "Operation",
+    "UsageRecord",
+    "MemoryDocument",
+    "MemoryProposal",
+    "MemoryRevision",
+    "MemoryScope",
+    "MemoryTombstone",
+    "MemoryWriteJournal",
+    "Artifact",
+    "Upload",
+    "SearchConnection",
+]

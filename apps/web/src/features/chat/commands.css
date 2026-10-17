@@ -1,0 +1,109 @@
+.run-commands {
+  margin: 20px 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+.run-commands > summary {
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.command-capability {
+  margin: 14px 0;
+}
+.command-list {
+  display: grid;
+  gap: 15px;
+  margin-top: 16px;
+}
+.command-card {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 14px;
+  min-width: 0;
+}
+.command-card .run-line small {
+  color: var(--muted);
+}
+.command-id {
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  margin: 9px 0;
+}
+.command-source,
+.command-log-output,
+.command-error pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.75;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.command-source {
+  max-height: 170px;
+  margin: 12px 0;
+}
+.command-log-output {
+  max-height: 330px;
+  min-height: 60px;
+  margin: 12px 0;
+}
+.command-source:focus-visible,
+.command-log-output:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.command-error pre {
+  max-height: 250px;
+}
+.command-resource-warning {
+  font-size: 12px;
+  color: var(--warn);
+  line-height: 1.8;
+  margin: 14px 0;
+}
+.command-notice {
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 12px 0;
+}
+.command-card details {
+  margin-top: 15px;
+}
+.command-card summary {
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.8;
+}
+.command-card .run-meta dd {
+  overflow-wrap: anywhere;
+}
+.command-logs {
+  margin-top: 15px;
+}
+.command-log-pagination {
+  gap: 7px;
+  margin: 12px 0;
+}
+.command-log-pagination .button {
+  font-size: 11px;
+  padding: 6px 9px;
+}
+.command-log-artifact {
+  display: grid;
+  gap: 7px;
+  margin: 15px 0;
+}
+.command-log-artifact .button {
+  justify-self: start;
+}
+.command-log-artifact small {
+  font-size: 10px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}

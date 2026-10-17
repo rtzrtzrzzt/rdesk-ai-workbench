@@ -1,0 +1,39 @@
+.workspace-management {
+  display: grid;
+  gap: 16px;
+}
+.workspace-manager-row {
+  padding: 18px 0;
+  border-top: 1px solid var(--border);
+}
+.workspace-manager-row h3 {
+  font-size: 14px;
+  font-weight: 550;
+}
+.workspace-manager-row .page-note {
+  overflow-wrap: anywhere;
+}
+.workspace-manager-row form {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  margin: 15px 0;
+}
+.workspace-manager-row label {
+  display: grid;
+  flex: 1;
+  gap: 7px;
+  font-size: 12px;
+}
+.workspace-action-confirm {
+  border-left: 2px solid var(--border);
+  padding: 12px;
+  margin: 15px 0;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.workspace-manager-message {
+  font-size: 12px;
+  margin-top: 15px;
+  line-height: 1.8;
+}

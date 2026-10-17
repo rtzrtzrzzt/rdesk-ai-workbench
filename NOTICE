@@ -1,0 +1,18 @@
+AI工作台
+2026
+
+本项目的原创代码、脚本和随附文档依 Apache License, Version 2.0 授权，
+另有明确标注的内容除外。完整许可证见 LICENSE。
+各项作品的版权由各自实际权利人保留。
+
+第三方软件、原生组件和模型权重保留各自的版权与许可证，
+不因本项目采用 Apache-2.0 而重新授权。详见 THIRD_PARTY_NOTICES.md。
+models/ 下的模型及权重不在本项目 Apache-2.0 授权范围内。
+
+以下为前端依赖 Apache ECharts 6.1.0 随包附带的上游 NOTICE：
+
+Apache ECharts
+Copyright 2017-2026 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (https://www.apache.org/).

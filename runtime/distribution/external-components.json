@@ -1,0 +1,14 @@
+{
+  "distribution": "external_only_not_bundled",
+  "local_model_reference": {
+    "asset_bytes_previously_verified": 132734506847,
+    "engine": "sglang",
+    "engine_source_commit": "e00930c5489053f26d86b179cee0d087f846acbb",
+    "engine_version": "0.5.21",
+    "model_revision": "fc694b54fb0174e0913e6adf86691ef85a4ead47",
+    "target_architecture": "aarch64",
+    "target_gpu": "NVIDIA GB10"
+  },
+  "schema_version": 1,
+  "scope": "Public reference from the approved deployment baseline; no capabilities, credentials, local runtime paths or installation assertion."
+}

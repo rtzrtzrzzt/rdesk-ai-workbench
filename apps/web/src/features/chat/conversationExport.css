@@ -1,0 +1,26 @@
+.conversation-export-trigger.button {
+  flex-shrink: 0;
+  padding: 5px 8px;
+  min-height: 28px;
+  font-size: 11px;
+}
+.conversation-export-dialog {
+  display: grid;
+  gap: 14px;
+}
+.conversation-export-title {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.conversation-export-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.conversation-export-options a {
+  text-decoration: none;
+}
+.conversation-export-options a[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: wait;
+}

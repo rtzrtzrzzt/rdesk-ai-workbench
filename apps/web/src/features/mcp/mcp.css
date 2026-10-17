@@ -1,0 +1,135 @@
+.mcp-section {
+  margin-top: 28px;
+}
+.mcp-section-body {
+  padding: 18px 22px;
+}
+.mcp-connection {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border);
+}
+.mcp-connection:last-child {
+  border-bottom: 0;
+}
+.mcp-connection h3,
+.mcp-form h3 {
+  font-size: 13px;
+  font-weight: 550;
+}
+.mcp-connection > .run-line p {
+  font-size: 12px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+.mcp-connection > .button-row {
+  margin: 13px 0;
+}
+.mcp-message {
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 15px 0;
+}
+.mcp-directory {
+  margin: 15px 0 0;
+  font-size: 12px;
+}
+.mcp-directory summary,
+.mcp-form summary {
+  cursor: pointer;
+}
+.mcp-directory pre,
+.mcp-target pre {
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 330px;
+  overflow: auto;
+  background: var(--bg);
+  padding: 12px;
+  border-radius: 8px;
+}
+.mcp-tool {
+  border-top: 1px solid var(--border);
+  padding: 12px 0;
+  margin: 10px 0;
+}
+.mcp-tool p {
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+.mcp-tool small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.mcp-tool details {
+  margin: 10px 0;
+}
+.mcp-fields {
+  display: grid;
+  gap: 17px;
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.mcp-fields label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.mcp-fields .checkbox-label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.mcp-fields .checkbox-label input {
+  width: auto;
+}
+.mcp-form {
+  margin-top: 20px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
+}
+.mcp-form textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.mcp-target {
+  font-size: 12px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mcp-target p {
+  color: var(--warn);
+  line-height: 1.8;
+}
+.mcp-tool-options {
+  max-height: 290px;
+  overflow: auto;
+  display: grid;
+  gap: 9px;
+  padding: 12px 0;
+}
+.mcp-secret-row {
+  display: grid;
+  gap: 10px;
+  margin: 15px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mcp-secret-row button {
+  justify-self: start;
+}
+.mcp-limits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px;
+  padding-top: 15px;
+}
+.mcp-limits small {
+  color: var(--muted);
+  font-size: 11px;
+}

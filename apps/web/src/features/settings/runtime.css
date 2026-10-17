@@ -1,0 +1,66 @@
+.workspace-runtime-fields {
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.workspace-runtime-fields > label,
+.workspace-runtime-option label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.workspace-runtime-fields .button {
+  justify-self: start;
+}
+.workspace-runtime-option {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.workspace-runtime-option small {
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.runtime-effective {
+  margin: 16px 0;
+  font-size: 12px;
+}
+.runtime-effective summary {
+  cursor: pointer;
+  line-height: 1.8;
+}
+.runtime-effective .run-meta {
+  margin-top: 12px;
+}
+.runtime-effective-row {
+  display: contents;
+}
+.runtime-effective dd {
+  overflow-wrap: anywhere;
+}
+.sandbox-select {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.sandbox-select > label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.sandbox-select > small,
+.sandbox-capability {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.sandbox-capability summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.sandbox-select > .button {
+  justify-self: start;
+}

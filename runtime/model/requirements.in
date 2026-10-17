@@ -1,0 +1,2 @@
+# SGLang's fixed release provides Qwen4Exp + NVIDIA mixed NVFP4 + file PLE.
+sglang==0.5.21

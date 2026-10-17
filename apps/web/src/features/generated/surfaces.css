@@ -1,0 +1,44 @@
+.run-surfaces {
+  margin: 24px 0 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.run-surface-snapshot {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 15px;
+  margin-top: 15px;
+}
+.run-surface-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.run-surface-meta small {
+  flex-basis: 100%;
+}
+.run-surface-meta a,
+.surface-source-preview > a {
+  text-decoration: underline;
+}
+.surface-source-preview {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.surface-source-preview > p {
+  margin-bottom: 10px;
+}
+.surface-source-preview pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 420px;
+  overflow: auto;
+  background: var(--surface);
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 11px;
+  margin: 12px 0;
+}

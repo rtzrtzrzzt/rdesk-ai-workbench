@@ -1,0 +1,42 @@
+.settings-vault {
+  border-bottom: 1px solid var(--border);
+  padding: 26px 0;
+}
+.settings-vault h2 {
+  font-size: 14px;
+  font-weight: 550;
+}
+.settings-vault h3 {
+  font-size: 13px;
+  font-weight: 550;
+  margin-bottom: 12px;
+}
+.vault-heading-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 15px;
+}
+.vault-initialize,
+.vault-passphrase {
+  margin: 18px 0;
+}
+.vault-passphrase {
+  display: grid;
+  gap: 13px;
+}
+.vault-passphrase label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.vault-actions {
+  margin: 16px 0;
+}
+.vault-message {
+  font-size: 12px;
+  margin: 15px 0;
+  line-height: 1.8;
+}
+.settings-vault .memory-conflict {
+  margin: 16px 0;
+}

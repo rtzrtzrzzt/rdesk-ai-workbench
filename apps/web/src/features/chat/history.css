@@ -1,0 +1,39 @@
+.message-history-action {
+  margin-top: 9px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.chat-message:hover .message-history-action,
+.chat-message:focus-within .message-history-action {
+  opacity: 1;
+}
+@media (hover: none) {
+  .message-history-action {
+    opacity: 1;
+  }
+}
+.message-history-action .button {
+  font-size: 11px;
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--muted);
+}
+.chat-fork-dialog pre {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 230px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 15px 0;
+}
+.chat-fork-provenance {
+  font-size: 11px;
+  line-height: 1.8;
+  margin-bottom: 18px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}

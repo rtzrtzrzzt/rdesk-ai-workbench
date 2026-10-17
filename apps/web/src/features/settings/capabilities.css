@@ -1,0 +1,21 @@
+.model-adapter-routes {
+  margin: 17px 0;
+}
+.adapter-route-list {
+  display: grid;
+  gap: 14px;
+  margin: 15px 0;
+}
+.adapter-route-list > div {
+  border-left: 2px solid var(--border);
+  padding: 8px 13px;
+}
+.adapter-route-list strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.adapter-route-list p {
+  font-size: 12px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
