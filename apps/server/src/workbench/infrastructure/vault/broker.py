@@ -15,7 +15,12 @@ from pathlib import Path
 
 from workbench.infrastructure.vault.engine import VaultEngine
 from workbench.infrastructure.vault.errors import VaultError
-from workbench.infrastructure.vault.ipc import peer_identity, receive_frame, send_frame
+from workbench.infrastructure.vault.ipc import (
+    peer_identity,
+    receive_frame,
+    send_frame,
+    unix_socket_address,
+)
 from workbench.infrastructure.vault.private import (
     check_private,
     private_directory,
@@ -216,11 +221,8 @@ class VaultBroker:
                     write_private(directory / "transport.token", self._transport_token.encode())
                     created.append(directory / "transport.token")
                 else:
-                    if len(os.fsencode(socket_path)) >= 100:
-                        raise VaultError(
-                            "UDS_PATH_TOO_LONG", "vault UDS路径过长，请选用较短的私有data_dir。"
-                        )
-                    server = _UnixServer(str(socket_path), _Handler)
+                    with unix_socket_address(socket_path) as address:
+                        server = _UnixServer(address, _Handler)
                     os.chmod(socket_path, 0o600)
                     created.append(socket_path)
                     address = {"transport": "uds", "socket": str(socket_path)}

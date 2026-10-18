@@ -24,7 +24,15 @@ python3 scripts/model/modelctl.py serve --fresh-ple
 
 guard崩溃、回收超时、无法读取/匹配身份、损坏/旧不完整记录、dispatch中断或Popen已返回但PID回执写失败，均保留意图并阻止新启动和PLE清理，不能自动覆盖或重试。只有明确尚未调用Popen、或Popen报告exec/setup失败且未返回child时才记录not_started；其他无回执dispatch保持outcome_unknown。fresh generation与cleanup共用锁；启动意图尚无engine身份时，cleanup预览和apply都暂时拒绝。正常运行仍只保护实际活跃PLE目录，允许检查/清理其余符合原规则的generation。
 
-此前短锁验证在隔离临时目录让两个真实自有Python进程竞争实际flock：第二进程在第一进程释放临界区后、第一进程仍存活时即取得锁；0700/0600与稳定inode核对通过，非私有目录、symlink祖先及symlink锁被拒绝。该次证据为`/tmp/modelctl-lock-20261018/result.json`，对应监管器替换前的代码。新监管器的真实自有子进程辅助验证见`/tmp/model-supervision-20261018-a2dh86ts/result.json`；它不加载权重，也不触发推理。**本轮没有执行实际模型的serve/precompile/stop/reload/cleanup，没有读写`.local/model`，也没有重启主机**。当前旧guard没有热更新；完整模型启动/停止及跨主机重启核对仍等待后续明确授权的真实环境验证。
+此前短锁验证在隔离临时目录让两个真实自有Python进程竞争实际flock：第二进程在第一进程释放临界区后、第一进程仍存活时即取得锁；0700/0600与稳定inode核对通过，非私有目录、symlink祖先及symlink锁被拒绝。该次证据为`/tmp/modelctl-lock-20261018/result.json`，对应监管器替换前的代码。新监管器的真实自有子进程辅助验证见`/tmp/model-supervision-20261018-a2dh86ts/result.json`；它不加载权重，也不触发推理。上述实现审查阶段当时没有操作实际模型或重启主机；这些`/tmp`记录现已随后续主机重启丢失，不能当作当前仍存在的文件。用户后来授权的实际启停结果见下一节。
+
+### 2026-10-18 后续实际启动
+
+旧 guard 已在此前用户要求关闭服务时正常停止。本次主机已重启，两个旧记录没有`boot_id`：主 agent 依据本机同`machine_id`的systemd journal、实时时钟/单调时钟及保存的引擎启动tick唯一匹配旧boot，时间对应误差分别为0.006040/0.005336秒；保留原始记录及日志证据后补齐真实boot归属，再调用现有`reconcile --apply`归档。此为人工核查的数据恢复，不是新增自动推断接口，也没有重启机器或删除阻塞记录。证据在`.local/model/control/legacy-boot-evidence/`及`.local/startup-measurements/20261018T042203Z/`。
+
+新版guard的首次实际加载复用了旧PLE backing，写入采样约15MiB/s，10/11分片时仍在慢速读写；638.296秒处主动停止。guard真实返回`linux_subreaper_echild`和`resources_closed=true`后，才通过既有清理工具移除最旧的未使用generation，再执行`serve --fresh-ple`。第二次加载从guard启动到`/ready`首次成功为575.016秒，随后真实文本请求在0.601秒内完成；模型保持ready。新文件写入阶段的一次采样约572MiB/s，不是整体推理或磁盘吞吐基准。
+
+默认`serve`仍会复用配置中的PLE目录，本轮没有将缓存轮换改成自动策略。第二次尝试改变了backing路径，而且前一次已读过部分文件，不能当成严格冷/热启动对照，也不能承诺不重启就会快很多。完整计时、各次尝试和当前服务状态以[统一状态清单](../../docs/implementation-status.md)及上述私有`startup.json`为准；新guard完整预编译、ready后的停止/再次启动和压力验证仍未据此完成。
 
 ### 旧状态与guard丢失后的显式过渡
 

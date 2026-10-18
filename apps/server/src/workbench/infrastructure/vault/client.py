@@ -6,7 +6,12 @@ import time
 from pathlib import Path
 
 from workbench.infrastructure.vault.errors import VaultError
-from workbench.infrastructure.vault.ipc import peer_identity, receive_frame, send_frame
+from workbench.infrastructure.vault.ipc import (
+    peer_identity,
+    receive_frame,
+    send_frame,
+    unix_socket_address,
+)
 from workbench.infrastructure.vault.private import private_directory, read_json, read_private
 
 
@@ -55,7 +60,11 @@ class VaultClient:
                 if remaining <= 0:
                     raise TimeoutError
                 connection.settimeout(remaining)
-                connection.connect(address)
+                if os.name == "nt":
+                    connection.connect(address)
+                else:
+                    with unix_socket_address(Path(address)) as endpoint:
+                        connection.connect(endpoint)
                 peer_identity(connection, expected_pid=descriptor["pid"])
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:

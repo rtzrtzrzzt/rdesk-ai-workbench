@@ -3,13 +3,43 @@
 import json
 import os
 import socket
+import stat
 import struct
 import sys
 import time
+from contextlib import contextmanager
+from pathlib import Path
 
 from workbench.infrastructure.vault.errors import VaultError
+from workbench.infrastructure.vault.private import private_directory
 
 MAX_FRAME = 131072
+
+
+@contextmanager
+def unix_socket_address(path: Path):
+    """Keep the socket in its private directory without Linux sun_path overflow."""
+    if len(os.fsencode(path)) < 100:
+        yield str(path)
+        return
+    if not sys.platform.startswith("linux"):
+        raise VaultError("UDS_PATH_TOO_LONG", "vault UDS路径过长，请选用较短的私有data_dir。")
+
+    private_directory(path.parent)
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) & 0o077
+        ):
+            raise VaultError("INSECURE_PRIVATE_PATH", "vault socket目录必须由当前账户独占。")
+        # Only bind/connect uses this per-process alias. Metadata and cleanup
+        # retain the real path; callers hold this FD until the syscall returns.
+        yield f"/proc/self/fd/{descriptor}/{path.name}"
+    finally:
+        os.close(descriptor)
 
 
 def peer_identity(connection: socket.socket, *, expected_pid: int | None = None) -> None:

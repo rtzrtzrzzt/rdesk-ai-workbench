@@ -1,9 +1,9 @@
 # Provider vault broker
 
 This package owns provider-master storage and local IPC. Importing its public
-API performs no disk, socket or Keyring I/O. Existing `secrets.py`, `vault.key`,
-provider rows, CSRF/session signing, HTTP, launcher and UI are untouched. The
-host integrates those surfaces; final product acceptance belongs to the host.
+API performs no disk, socket or Keyring I/O. Provider records, HTTP, launcher
+and UI integrate the public API below; they do not own the broker's master
+storage or IPC framing. Final product acceptance belongs to the host.
 
 ## Public API and lifecycle
 
@@ -85,9 +85,16 @@ data directory may be created if its parent exists; existing data and vault
 directories must already be private. POSIX directories require owner UID and
 0700-equivalent permissions; files and UDS require 0600-equivalent permissions.
 Unsafe existing directories are rejected, not silently chmodded. The broker
-uses `data_dir/vault/` and owns its native file lock. Keep the complete UDS path
-shorter than 100 encoded bytes. Readiness prints only `{"broker_ready":true}`
-after its private descriptor is published; poll client status for actual state.
+uses `data_dir/vault/` and owns its native file lock. For Linux UDS paths of
+100 encoded bytes or longer, broker and client use a private directory FD via
+`/proc/self/fd/` during bind/connect. The FD's directory type, UID and permissions
+are checked; the actual socket, descriptor path and cleanup remain in the
+original private vault directory. Other Unix platforms still require the full
+UDS path to be shorter than 100 encoded bytes. Readiness prints only
+`{"broker_ready":true}` after its private descriptor is published; poll client
+status for actual state. The host launcher verifies that status, all four
+component identities, API listener ownership and Worker heartbeats before
+reporting successful startup.
 
 Linux/macOS use private UDS with peer UID checks; Linux clients also verify
 server PID. Windows uses loopback `127.0.0.1` on an ephemeral port plus a random

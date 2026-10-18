@@ -315,18 +315,16 @@ def start(open_browser: bool) -> None:
                 write_state(state)
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
-                try:
-                    if client.get(url + "/health/live").is_success and workers_ready(state):
-                        print(f"AI 工作台：{url}")
-                        if open_browser:
-                            webbrowser.open(url)
-                        return
-                except httpx.TransportError:
-                    pass
-                if not process_matches(state["api"]):
-                    raise SystemExit(f"API 启动失败，请查看 {state['api']['log']}")
+                if _healthy_owned(state, client, settings, url):
+                    print(f"AI 工作台：{url}")
+                    if open_browser:
+                        webbrowser.open(url)
+                    return
+                for component, record in state.items():
+                    if not process_matches(record):
+                        raise SystemExit(f"{component} 启动失败，请查看 {record['log']}")
                 time.sleep(0.2)
-            raise SystemExit("API 或后台 Worker 尚未就绪，请查看原生启动日志。")
+            raise SystemExit("API、后台 Worker 或凭据服务尚未就绪，请查看原生启动日志。")
 
 
 def stop(*, force=False) -> None:
