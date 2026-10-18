@@ -39,7 +39,27 @@ def approval_view(row: Approval) -> dict:
         "tool_name": row.tool_name,
         "arguments": row.arguments,
         "status": row.status,
+        "review": row.review,
     }
+
+
+def activity(db, run):
+    from workbench.modules.runs.domain import Attempt
+    from workbench.modules.tools.domain import Operation
+
+    if run.status != "running":
+        return None
+    if db.scalar(
+        select(Operation.id)
+        .where(Operation.run_id == run.id, Operation.status == "running")
+        .limit(1)
+    ):
+        return "tool"
+    if db.scalar(
+        select(Attempt.id).where(Attempt.run_id == run.id, Attempt.status == "running").limit(1)
+    ):
+        return "generating"
+    return None
 
 
 def view(db: Session, run: Run) -> dict:
@@ -51,6 +71,9 @@ def view(db: Session, run: Run) -> dict:
         "thread_id": run.thread_id,
         "status": run.status,
         "model_connection_id": run.model_connection_id,
+        "reasoning_effort": run.config_snapshot.get("generation_overrides", {}).get(
+            "reasoning_effort"
+        ),
         "root_run_id": run.root_run_id,
         "parent_run_id": run.parent_run_id,
         "state_artifact_id": run.config_snapshot.get("context_compaction", {}).get(
@@ -59,6 +82,8 @@ def view(db: Session, run: Run) -> dict:
         "created_at": run.created_at,
         "last_event_seq": run.last_event_seq,
         "error": run.error,
+        "paused_reason": run.config_snapshot.get("safety", {}).get("paused_reason"),
+        "activity": activity(db, run),
         "questions": [question_view(q) for q in questions],
         "approvals": [approval_view(a) for a in approvals],
     }
@@ -158,6 +183,10 @@ def close_request(db: Session, user_id: str, request_id: str) -> dict:
 def idempotent(
     db: Session, user_id: str, request_id: str, action: str, body: dict, execute: Callable[[], dict]
 ) -> dict:
+    if "reasoning_effort" in body and body["reasoning_effort"] is None:
+        # Both forms inherit the connection. Keep retries of pre-selector
+        # requests compatible with their already stored digest.
+        body = {key: value for key, value in body.items() if key != "reasoning_effort"}
     serialized = json.dumps({"action": action, "body": body}, sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha256(serialized.encode()).hexdigest()
     lock_key = request_lock_key(user_id, request_id)
@@ -191,10 +220,14 @@ def idempotent(
 def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
     def execute() -> dict:
         thread = conversation_service.get_thread(db, user_id, thread_id, lock=True)
+        from workbench.modules.conversation_queue import ensure_writable
+
+        ensure_writable(thread)
         active = db.scalar(
             select(Run.id)
             .where(
                 Run.thread_id == thread_id,
+                Run.kind != "context_compaction",
                 Run.status.not_in(TERMINAL_STATUSES),
             )
             .limit(1)
@@ -231,12 +264,18 @@ def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
                 422,
             )
         model_service.validate_endpoint(model.endpoint, model.allow_remote)
-        from workbench.modules.files.inputs import validate_attachments
+        from workbench.modules.files.inputs import lock_attachments, validate_attachments
 
+        lock_attachments(db, user_id, thread.workspace_id, values.get("attachments", []))
         attachments = validate_attachments(
             db, user_id, thread.workspace_id, model, values.get("attachments", [])
         )
         revision = model_service.freeze(db, user_id, model.id)
+        from workbench.modules.models.engine_adapters import reasoning_overrides
+
+        generation_overrides = reasoning_overrides(
+            revision.configuration, values.get("reasoning_effort")
+        )
         options = defaults.options.model_dump(mode="json")
         run = Run(
             id=new_id(),
@@ -253,6 +292,7 @@ def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
             config_snapshot={
                 "model_version": model.version,
                 "model_revision_id": revision.id,
+                "generation_overrides": generation_overrides,
                 "max_output_tokens": revision.configuration["generation"]["max_output_tokens"],
                 "runtime_options": options,
                 "runtime_options_sources": defaults.sources,
@@ -267,6 +307,9 @@ def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
         run.root_run_id = run.id
         db.add(run)
         db.flush()
+        from workbench.modules.context.service import yield_idle_compaction
+
+        yield_idle_compaction(db, thread_id, run.id)
         db.add(
             Message(
                 thread_id=thread_id,

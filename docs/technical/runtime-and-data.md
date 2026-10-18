@@ -112,6 +112,10 @@ MCP 等工具的一次逻辑执行可能包含多轮协议交换和等待输入�
 
 已接受的用户补充及协作消息保存独立 ID；真正纳入模型请求的 ID 保存于 `Attempt.input_message_ids`，仅成功请求写入 `AgentMessage.delivered_attempt_id`。这证明输入已送入成功调用，不证明模型已完成该要求。完成提交与补充输入共用 Run 行锁；结束图仍有未投递输入时，使用原有消息和递增轮次重新排队，不能直接发布成功。压缩保留待投递输入，历史与 mailbox 按 ID 去重。
 
+Steer 在生成阶段每 250ms 独立检查当前 Attempt 尚未包含的新用户输入，不依赖模型继续吐 token。发现新要求后只关闭当前未完成生成：本地 SGLang 按 Attempt 的 `rid` 定向 abort，并关闭 HTTP 流；其他提供方关闭流。已显示的正文和公开思考保留为被引导替换的片段；重新编译上下文、当前权限和附件，以同一 Run 发起新请求。输入在成功后固定到图消息中的实际位置，后续轮次不再把旧要求移到末尾。未完成工具参数不执行，已开始的命令、MCP 交互等先到实际完成或结果核对边界；未开始的过期调用可跳过并重新规划。Queue 仍等待当前任务正常收尾。
+
+父任务收到 Steer 时，正在生成的子任务可协作让出模型许可，但不会被取消；主任务优先处理用户新要求。普通请求按持久等待顺序取得 PostgreSQL 模型锁，当前整实例推理容量仍为 1；工具与任务等待可并行，不意味着四路同时推理。该实现适配现有 Qwen HTTP 服务，与 OpenAI GPT-6 WebSocket 原生 `response.steer` 的协议不同，依据见[官方说明](https://developers.openai.com/api/docs/guides/steering)。
+
 ### 4.2 图状态
 
 图状态保存 schema_version、graph_version、run_id、消息/产物引用、配置快照引用、当前步骤、预算摘要、未完成工具调用和中断关联。大文件、完整长日志和图片不嵌入每个检查点，保存受控引用。
@@ -246,10 +250,12 @@ LangGraph 的中断恢复可能重新进入节点，因此中断前代码必须�
 
 | 接口 | 行为 |
 | --- | --- |
-| POST /api/v1/auth/login；GET /api/v1/auth/session；POST /api/v1/auth/logout | 登录、读取与撤销会话 |
+| POST /api/v1/auth/bootstrap；GET /api/v1/auth/session；POST /api/v1/auth/logout | 本机免密码会话、读取与撤销会话；回环访问与 CSRF 边界保留 |
 | GET/POST /api/v1/workspaces | 列表与创建 |
 | POST /api/v1/workspaces/{workspace_id}/rename、archive、restore、remove | 分别重命名、归档、恢复、移除登记；路径最后一段取其中之一 |
 | GET/POST /api/v1/workspaces/{workspace_id}/threads | 会话列表与创建 |
+| GET /api/v1/threads/{thread_id}/activity | 按工具操作游标分页的聊天活动，列表不返回完整参数 |
+| GET /api/v1/threads/{thread_id}/activity/{operation_id} | 当前会话可见操作的参数和有界结果，展开时读取 |
 | POST /api/v1/threads/{thread_id}/runs | 提交任务；可选模型覆盖，expected_model 绑定展示过的连接 ID/版本 |
 | GET /api/v1/runs/{run_id} | 任务、问题、审批和事件水位 |
 | GET /api/v1/runs/{run_id}/conversation-snapshot | 同一 REPEATABLE READ 快照中的任务、消息及事件游标 |
@@ -314,6 +320,8 @@ LangGraph 的中断恢复可能重新进入节点，因此中断前代码必须�
 
 基础事件表：run.accepted、run.state_changed、run.input_received、run.cancellation_requested；message.delta、message.completed；step.started、step.finished；attempt.started、attempt.finished；tool.progress、tool.result、tool.retry_scheduled、tool.outcome_unknown；question.created、question.answered、question.invalidated；approval.requested、approval.resolved、approval.expired；artifact.created；child.state_changed；resource.waiting、resource.released；usage.updated；error.reported。完成事件在 payload 中给出成功/失败/取消结果，不再创建一套同义的 step.completed 或 run.status_changed。类型表由统一契约维护，适配器新增类型须明确兼容方式。
 
+公开可读思考使用 `message.reasoning_delta` 和 `Message.reasoning`，与正文独立累积；不公开 encrypted reasoning、signature 或 redacted 块。`run.input_processing` 说明哪些输入 ID 已进入正在执行的请求，与接收和成功投递分别展示。暂停任务结束当前 SSE 订阅并核对权威快照，恢复后重新订阅，不能继续呈现为生成中。
+
 ### 9.2 持久化与回放
 
 同一 Run 通过短事务分配 seq 并写事件。文本流按有界时间/大小分批保存，减少每 token 一次数据库写入；只有已持久化的批次才作为可回放事件交给客户端。产物和完整长日志另存文件，事件只保存索引或有限预览。
@@ -347,6 +355,8 @@ TanStack Query 维护查询，React hooks 管理布局、草稿和流状态。�
 登录/注销推进认证代次，旧请求不能发布新会话的 CSRF 或页面结果；注销清理当前挂载状态与待发草稿。未确认发送保留原 request_id、模型、附件和输入，关闭提示或导航后仍有可达的核对入口，不能把丢失响应解释为未接受。
 
 客户端可显示“正在提交”，只有收到后端事实才显示“已接受”。待答问题和精确授权始终可达；内部步骤、原始 JSON、版本和调试记录默认收起。
+
+普通聊天按持久时间混排模型进度正文、工具状态与最终答复；工具的名称、简短目标和状态直接可见，结果可展开，原始参数再折叠。可见思考默认折叠，点击显示提供方实际返回的文字。活动独立分页，用户分支只包含所选历史实际引用的工具，不引入源会话分支点之后的操作。子 agent 由 Run 的父子关联识别，普通侧栏不列为新会话；主任务中的子任务入口打开独立只读对话面板，使用子 Run 自己的状态和 SSE，不改变当前主会话。
 
 ## 12. 必须验证的故障窗口
 

@@ -10,6 +10,7 @@ from workbench.contracts.errors import AppError
 from workbench.infrastructure.database import engine, now
 from workbench.modules.automation.domain import AutomationSession
 from workbench.modules.automation.policy import LIVE
+from workbench.modules.collaboration.inbox import has_new_user_input as has_new_input
 from workbench.modules.interactions import Approval, Question
 from workbench.modules.mcp.host_domain import ToolExchange
 from workbench.modules.mcp.store import (
@@ -58,6 +59,18 @@ def claim(worker_id: str, *, queue: str = "agent") -> tuple[str, int] | None:
             .correlate(Run)
             .exists()
         )
+        from workbench.modules.collaboration.domain import AgentMessage
+
+        user_input = (
+            select(AgentMessage.id)
+            .where(
+                AgentMessage.to_run_id == Run.id,
+                AgentMessage.source == "user",
+                AgentMessage.delivered_attempt_id.is_(None),
+            )
+            .correlate(Run)
+            .exists()
+        )
         transport_state = ToolExchange.outcome["reconciliation"]["transport_cleanup"][
             "state"
         ].astext
@@ -98,7 +111,7 @@ def claim(worker_id: str, *, queue: str = "agent") -> tuple[str, int] | None:
             and_(
                 Job.status == "waiting",
                 Run.status == "waiting_children",
-                or_(~children_alive, Run.wait_expires_at <= now()),
+                or_(~children_alive, Run.wait_expires_at <= now(), user_input),
             ),
             and_(
                 Job.status == "cleanup",
@@ -130,6 +143,7 @@ def claim(worker_id: str, *, queue: str = "agent") -> tuple[str, int] | None:
         waiting_ready = run.status == "waiting_children" and (
             not has_children_running(db, run.id)
             or bool(run.wait_expires_at and run.wait_expires_at <= now())
+            or has_new_input(db, run.id)
         )
         cleanup_ready = (
             job
@@ -341,20 +355,27 @@ def initial_state(run_id: str) -> dict:
             if path.is_file() and path.stat().st_size <= 32_000:
                 rules.append(f"\n用户规则（{path.name}）：\n{path.read_text(encoding='utf-8')}")
         messages = [{"role": "system", "content": system + "".join(rules)}]
+        seen_inputs = set()
         for message in history:
-            messages.append(
-                {
-                    **(
-                        message.provider_message
-                        or {
-                            "role": message.role,
-                            "content": message.content,
-                            "attachments": message.attachments,
-                        }
-                    ),
-                    "_message_id": message.id,
-                }
-            )
+            continued = (message.provider_message or {}).get("_continuation_messages", [])
+            row = {
+                **(
+                    message.provider_message
+                    or {
+                        "role": message.role,
+                        "content": message.content,
+                        "attachments": message.attachments,
+                    }
+                ),
+                "_message_id": message.id,
+            }
+            for item in [*continued, row]:
+                identifier = item.get("_input_message_id")
+                if identifier:
+                    if identifier in seen_inputs:
+                        continue
+                    seen_inputs.add(identifier)
+                messages.append(item)
         from workbench.modules.context.history import complete_tool_boundaries
 
         messages = complete_tool_boundaries(messages)
@@ -388,6 +409,13 @@ def finish(
             cancellation = "deadline_exceeded"
         from workbench.modules.collaboration.inbox import has_pending_inputs
 
+        if error and error.kind in {"budget", "pause", "outcome_unknown"} and not cancellation:
+            from workbench.modules.runs.safety import pause
+
+            pause(db, run, {"code": error.code, "message": error.message})
+            job.status, job.lease_owner, job.lease_until = "waiting", None, None
+            return
+
         if (
             not waiting
             and not cancellation
@@ -402,24 +430,30 @@ def finish(
             job.lease_owner, job.lease_until = None, None
             return
         if waiting and not cancellation and not error:
-            unresolved = db.scalar(
-                select(Question.id)
-                .where(
-                    Question.run_id == run_id,
-                    Question.status == "pending",
+            unresolved = (
+                run.status == "paused"
+                or db.scalar(
+                    select(Question.id)
+                    .where(
+                        Question.run_id == run_id,
+                        Question.status == "pending",
+                    )
+                    .limit(1)
                 )
-                .limit(1)
-            ) or db.scalar(
-                select(Approval.id)
-                .where(
-                    Approval.run_id == run_id,
-                    Approval.status == "pending",
+                or db.scalar(
+                    select(Approval.id)
+                    .where(
+                        Approval.run_id == run_id,
+                        Approval.status == "pending",
+                    )
+                    .limit(1)
                 )
-                .limit(1)
             )
             if run.status == "waiting_children":
-                unresolved = has_children_running(db, run.id) and not (
-                    run.wait_expires_at and run.wait_expires_at <= now()
+                unresolved = (
+                    has_children_running(db, run.id)
+                    and not (run.wait_expires_at and run.wait_expires_at <= now())
+                    and not has_new_input(db, run.id)
                 )
             if not unresolved:
                 set_status(db, run, "queued")

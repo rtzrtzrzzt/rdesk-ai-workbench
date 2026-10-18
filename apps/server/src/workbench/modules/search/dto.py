@@ -18,6 +18,24 @@ class SearchError(DTO):
     retryable: bool
 
 
+class SearchEngineCatalogQuery(DTO):
+    scope: Scope | None = None
+    endpoint: str | None = Field(default=None, min_length=1, max_length=2048)
+    timeout_seconds: int = Field(default=20, ge=3, le=60)
+
+
+class SearchEngine(DTO):
+    name: str
+    categories: list[str]
+    default_enabled: bool
+
+
+class SearchEngineCatalog(DTO):
+    endpoint: str
+    fetched_at: datetime
+    engines: list[SearchEngine]
+
+
 class SearchConnectionSave(DTO):
     scope: Scope
     name: str = Field(min_length=1, max_length=100)

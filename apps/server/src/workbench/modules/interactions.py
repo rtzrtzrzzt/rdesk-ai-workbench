@@ -27,3 +27,4 @@ class Approval(Entity, Base):
     status: Mapped[str] = mapped_column(default="pending")
     approved: Mapped[bool | None]
     parameters_digest: Mapped[str]
+    review: Mapped[dict | None] = mapped_column(JSONB)

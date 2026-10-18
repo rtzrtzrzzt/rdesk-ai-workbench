@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from workbench.modules.automation import tools as automation
+from workbench.modules.files.dto import PresentFile
 from workbench.modules.files.exports_dto import ArtifactReference, ExportSpec
 from workbench.modules.generated.a2ui import A2UIInput
 from workbench.modules.generated.dto import SurfaceDraft
@@ -63,6 +64,10 @@ class AskUser(Arguments):
 
 class DiscoverTools(Arguments):
     names: list[str] = Field(default_factory=list, max_length=6)
+    action: Literal["add", "remove", "replace"] = Field(
+        default="add",
+        description="默认add保留已加载工具；remove卸载指定额外工具；replace明确替换额外工具集合。",
+    )
 
 
 class MemorySearch(Arguments):
@@ -108,18 +113,19 @@ class FileTaskStatus(Arguments):
 
 class SpawnAgent(Arguments):
     name: str = Field(min_length=1, max_length=100)
-    task: str = Field(min_length=1, max_length=8000)
+    task: str = Field(min_length=1, max_length=131072)
     deliverable: str = Field(min_length=1, max_length=2000)
     model_connection_id: UUID | None = None
-    allowed_tools: list[str] = Field(
-        default_factory=lambda: ["list_files", "read_file", "search_files"],
-        min_length=1,
-        max_length=16,
+    allowed_tools: list[str] | None = Field(
+        default=None,
+        max_length=128,
+        description="留空继承父任务允许的只读工具；空列表为纯文本任务。写入等额外能力须明确指定且不得扩大父权限。",
     )
     paths: list[str] = Field(default_factory=list, max_length=16)
     mode: Literal["read_only", "serial_write"] = "read_only"
-    max_model_rounds: int = Field(default=8, ge=1, le=16)
-    max_output_tokens: int = Field(default=1024, ge=64, le=4096)
+    # Accept old checkpointed calls; new tool schemas inherit user budgets.
+    max_model_rounds: int | None = Field(default=None, ge=1, le=65536, exclude=True)
+    max_output_tokens: int | None = Field(default=None, ge=64, le=131072, exclude=True)
 
 
 class AgentTarget(Arguments):
@@ -127,7 +133,7 @@ class AgentTarget(Arguments):
 
 
 class AgentMessage(AgentTarget):
-    message: str = Field(min_length=1, max_length=8000)
+    message: str = Field(min_length=1, max_length=131072)
 
 
 class WaitAgents(Arguments):
@@ -136,9 +142,11 @@ class WaitAgents(Arguments):
 
 class ReadTaskHistory(Arguments):
     run_id: UUID | None = None
+    message_id: UUID | None = None
     start_message: int = Field(default=1, ge=1)
+    start_character: int = Field(default=0, ge=0)
     limit: int = Field(default=3, ge=1, le=10)
-    max_chars: int = Field(default=600, ge=100, le=2000)
+    max_chars: int = Field(default=4000, ge=100, le=65536)
 
 
 class MCPListTools(Arguments):
@@ -162,9 +170,16 @@ class ToolSpec:
     requires_approval: bool = False
     replay_policy: Literal["read", "idempotent", "conditional_write", "at_most_once"] = "read"
     module: str = "filesystem"
+    timeout_seconds: int = 120
 
 
 TOOLS: dict[str, ToolSpec] = {
+    "present_file": ToolSpec(
+        PresentFile,
+        "为用户展示真实文件：指定工作区path或artifact_id，返回可直接点击的版本化Markdown链接；图片预览由文件Worker处理。",
+        replay_policy="idempotent",
+        module="artifacts",
+    ),
     "start_command": ToolSpec(
         StartCommand,
         "启动需明确批准的长主机命令，返回持久句柄；不是OS沙箱。每任务一个/本机两个，任务结束会停止。",
@@ -305,7 +320,9 @@ TOOLS: dict[str, ToolSpec] = {
     ),
     "discover_tools": ToolSpec(
         DiscoverTools,
-        "names为空列出额外工具；填写工具名后为本任务加载其schema。记忆、网络工具按需加载。",
+        "names为空且action=add列出额外工具；默认增量加载并保留已有工具。"
+        "卸载或替换须显式指定action=remove或replace。新工具schema仅在下一轮模型请求提供，"
+        "本轮不能同时调用尚未加载的工具。记忆、网络工具按需加载。",
         replay_policy="idempotent",
         module="discovery",
     ),
@@ -347,7 +364,7 @@ TOOLS: dict[str, ToolSpec] = {
     ),
     "spawn_agent": ToolSpec(
         SpawnAgent,
-        "派生独立子任务；最多3个未释放名额、深度1，指定目标/交付/工具/文件范围。共享模型排队。",
+        "派生独立子任务；最多3个未释放名额、深度1，指定目标/交付/工具/文件范围。继承用户预算，共享模型排队；可先派遣独立任务再继续自己的工作。",
         replay_policy="idempotent",
         module="collaboration",
     ),
@@ -411,7 +428,9 @@ def definitions(names: list[str] | None = None) -> list[dict]:
             "function": {
                 "name": name,
                 "description": TOOLS[name].description,
-                "parameters": compact_schema(TOOLS[name].schema.model_json_schema()),
+                "parameters": compact_schema(
+                    TOOLS[name].schema.model_json_schema(mode="serialization")
+                ),
             },
         }
         for name in (names if names is not None else CORE_TOOL_NAMES)

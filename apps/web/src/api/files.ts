@@ -2,6 +2,7 @@ import { request } from './client'
 import type {
   ArtifactView,
   ArtifactInputPlan,
+  PreparedAttachment,
   ExportCreate,
   ExportCapability,
   FilePreview,
@@ -16,6 +17,11 @@ const root = (workspaceId: string) => `/workspaces/${encodeURIComponent(workspac
 const artifactPath = (workspaceId: string, artifactId: string) =>
   `${root(workspaceId)}/artifacts/${encodeURIComponent(artifactId)}`
 export const filesApi = {
+  prepare: (workspaceId: string, modelId: string, ids: string[]) =>
+    request<PreparedAttachment[]>(
+      `${root(workspaceId)}/attachments/prepare`,
+      post({ model_connection_id: modelId, artifact_ids: ids }),
+    ),
   inputPlan: (workspaceId: string, modelId: string, ids: string[]) =>
     request<ArtifactInputPlan[]>(
       `${root(workspaceId)}/input-plan`,
@@ -42,8 +48,10 @@ export const filesApi = {
       `${root(workspaceId)}/uploads/${encodeURIComponent(id)}/complete`,
       post({}),
     ),
-  preview: (workspaceId: string, id: string) =>
-    request<FilePreview>(`${artifactPath(workspaceId, id)}/preview`),
+  preview: (workspaceId: string, id: string, version?: string) =>
+    request<FilePreview>(
+      `${artifactPath(workspaceId, id)}/preview${version ? `?version=${encodeURIComponent(version)}` : ''}`,
+    ),
   process: (workspaceId: string, id: string, input: ProcessFile) =>
     request<FileTask>(`${artifactPath(workspaceId, id)}/process`, post(input)),
   tasks: (workspaceId: string) => request<FileTask[]>(`${root(workspaceId)}/file-tasks`),

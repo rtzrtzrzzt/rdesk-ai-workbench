@@ -1097,6 +1097,11 @@ input::placeholder {
   margin-left: auto;
 }
 .dialog {
+  position: fixed;
+  inset: 0;
+  /* Tailwind resets the browser's auto margins that center modal dialogs. */
+  margin: auto;
+  overflow: auto;
   border: 1px solid var(--border);
   border-radius: 15px;
   padding: 0;

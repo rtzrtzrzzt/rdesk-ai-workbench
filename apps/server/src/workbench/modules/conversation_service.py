@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from workbench.contracts.errors import AppError
@@ -6,7 +6,27 @@ from workbench.modules import workspace_service
 from workbench.modules.conversations import Message, Thread
 
 
-def thread_view(row: Thread) -> dict:
+def thread_view(row: Thread, db=None) -> dict:
+    from workbench.modules.conversations import QueuedInput
+    from workbench.modules.runs.domain import Run
+    from workbench.modules.runs.service import activity
+
+    latest = (
+        db.scalar(
+            select(Run)
+            .where(Run.thread_id == row.id, Run.kind != "context_compaction")
+            .order_by(Run.created_at.desc(), Run.id.desc())
+            .limit(1)
+        )
+        if db
+        else None
+    )
+    child = (
+        db.scalar(select(Run).where(Run.thread_id == row.id, Run.parent_run_id.is_not(None)))
+        if db
+        else None
+    )
+    parent = db.get(Run, child.parent_run_id) if child else None
     return {
         "id": row.id,
         "workspace_id": row.workspace_id,
@@ -15,16 +35,38 @@ def thread_view(row: Thread) -> dict:
         "fork_message_id": row.fork_message_id,
         "created_at": row.created_at,
         "version": row.version,
+        "archived": row.archived,
+        "deleting": row.deleting,
+        "is_subagent": child is not None,
+        "agent_parent_thread_id": parent.thread_id if parent else None,
+        "latest_run_id": latest.id if latest else None,
+        "latest_run_status": latest.status if latest else None,
+        "latest_run_phase": activity(db, latest) if latest else None,
+        "queue_count": db.scalar(
+            select(func.count())
+            .select_from(QueuedInput)
+            .where(QueuedInput.thread_id == row.id, QueuedInput.status != "dispatched")
+        )
+        if db
+        else 0,
     }
 
 
 def message_view(row: Message) -> dict:
+    from workbench.modules.models.providers import visible_reasoning
+
+    provider = row.provider_message or {}
+    phase = provider.get("phase")
+    if provider.get("tool_calls"):
+        phase = "commentary"
     return {
         "id": row.id,
         "thread_id": row.thread_id,
         "run_id": row.run_id,
         "role": row.role,
         "content": row.content,
+        "reasoning": row.reasoning or visible_reasoning(provider.get("provider_output")),
+        "phase": phase if phase in {"commentary", "final_answer"} else None,
         "status": row.status,
         "attachments": row.attachments,
         "forkable": (
@@ -50,7 +92,7 @@ def get_thread(db: Session, user_id: str, thread_id: str, *, lock: bool = False)
 def list_threads(db: Session, user_id: str, workspace_id: str) -> list[dict]:
     workspace_service.get(db, user_id, workspace_id)
     return [
-        thread_view(row)
+        thread_view(row, db)
         for row in db.scalars(
             select(Thread)
             .where(
@@ -67,7 +109,7 @@ def create_thread(db: Session, user_id: str, workspace_id: str, title: str) -> d
     row = Thread(user_id=user_id, workspace_id=workspace_id, title=title)
     db.add(row)
     db.flush()
-    return thread_view(row)
+    return thread_view(row, db)
 
 
 def list_messages(db: Session, user_id: str, thread_id: str) -> list[dict]:
@@ -107,7 +149,7 @@ def history_rows(db: Session, thread: Thread, *, completed_only: bool = False) -
             )
             if anchor is None:
                 raise AppError("thread_branch_invalid", "分支来源消息已不可读取。", 409)
-            prefix = rows[: anchor + 1]
+            prefix = rows[: anchor + int(current.fork_include_anchor)]
         own = list(
             db.scalars(
                 select(Message)
@@ -129,6 +171,8 @@ def fork_thread(db: Session, user_id: str, thread_id: str, command) -> dict:
 
     def create():
         source = get_thread(db, user_id, thread_id, lock=True)
+        if source.deleting:
+            raise AppError("thread_deleting", "会话正在删除，不能建立新分支。", 409)
         history = history_rows(db, source)
         anchor = next((row for row in history if row.id == str(command.source_message_id)), None)
         if (

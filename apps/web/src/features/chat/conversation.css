@@ -25,14 +25,78 @@
 }
 .composer-tools {
   min-width: 0;
+  flex-wrap: wrap;
+}
+.composer-toolbar {
+  gap: 8px;
+  align-items: flex-end;
+}
+.composer-actions {
+  flex-shrink: 0;
+}
+.reasoning-effort-label select {
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  padding: 6px;
+  color: var(--muted);
+  max-width: 125px;
+}
+.reasoning-effort-label select:not(:disabled) {
+  cursor: pointer;
 }
 .composer-tools .icon-button {
   flex-shrink: 0;
+}
+.context-usage {
+  position: relative;
+  font-size: 11px;
+  color: var(--muted);
+}
+.context-usage > summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+.context-usage progress {
+  width: 36px;
+  height: 5px;
+  margin-left: 5px;
+  accent-color: var(--fg);
+}
+.context-usage-details {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  z-index: 20;
+  width: min(310px, 75vw);
+  max-height: 55vh;
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px #0002;
+  color: var(--fg);
+  line-height: 1.6;
+}
+.context-usage dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  margin: 0 0 12px;
+}
+.context-usage dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 .run-panel {
   border: 0;
   border-radius: 0;
   overflow: visible;
+}
+.run-panel:empty {
+  display: none;
 }
 .run-panel > details {
   border-top: 1px solid var(--border);
@@ -50,6 +114,27 @@
 }
 .run-panel-body {
   padding: 0 0 18px;
+}
+.task-record {
+  border-bottom: 1px solid var(--border);
+}
+.task-record .task-row {
+  border-bottom: 0;
+}
+.task-details > summary {
+  padding: 0 20px 16px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.task-details .run-panel-body {
+  padding: 0 20px 18px;
+  overflow-wrap: anywhere;
+}
+.task-details pre {
+  max-height: 340px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 .run-visible-error {
   margin: 12px 0;
@@ -133,5 +218,240 @@
   }
   .composer-mode-row .segmented button {
     padding: 6px 8px;
+  }
+}
+
+.queue-panel {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.queue-panel > ol {
+  padding: 0;
+  margin: 8px 0 0;
+  list-style: none;
+  max-height: 230px;
+  overflow-y: auto;
+}
+.queue-panel li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.queue-item-content {
+  flex: 1;
+  min-width: 0;
+}
+.queue-item-content p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0 0 5px;
+}
+.queue-item-content small {
+  color: var(--muted);
+}
+.queue-edit {
+  width: 100%;
+}
+.queue-edit textarea {
+  width: 100%;
+  min-height: 85px;
+}
+.composer-default-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+.composer-default-mode select {
+  padding: 4px;
+  width: auto;
+  font-size: 11px;
+}
+.steering-delivery {
+  margin: 0;
+  max-height: 70px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.message-run-status {
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+.thread-list-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.thread-list-row > button {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.thread-list-row > button > span {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-list-row small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  margin-top: 3px;
+}
+.thread-menu {
+  flex-shrink: 0;
+}
+.thread-list .thread-menu > button {
+  width: 28px;
+  padding: 5px;
+}
+.archived-threads > summary {
+  color: var(--muted);
+  font-size: 11px;
+  padding: 12px 8px;
+  cursor: pointer;
+}
+.runtime-advanced {
+  margin-top: 12px;
+}
+.runtime-advanced > summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+@media (max-width: 600px) {
+  .queue-panel li {
+    flex-wrap: wrap;
+  }
+  .queue-item-content {
+    flex-basis: 100%;
+  }
+  .composer-default-mode {
+    margin-left: 0;
+  }
+}
+.approval-review {
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.approval-review strong {
+  font-size: 12px;
+}
+.approval-review p {
+  margin: 6px 0;
+}
+.approval-review small {
+  color: var(--muted);
+}
+.composer-library {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 5px 7px;
+  border-radius: 6px;
+}
+.composer-library:hover:not(:disabled) {
+  background: var(--hover);
+}
+.composer-dragging .composer {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.composer-attachments {
+  max-height: 210px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.attachment-list {
+  display: grid;
+  gap: 8px;
+}
+.attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: var(--surface);
+}
+.attachment-chip-content {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+.attachment-chip-content strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.attachment-chip-content span {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.attachment-chip-content progress {
+  max-width: 100%;
+  height: 4px;
+}
+.attachment-consent {
+  padding: 8px 0;
+}
+.attachment-library {
+  display: grid;
+  gap: 5px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.attachment-library > button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.attachment-library > button > span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.attachment-library small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.attachment-spinner {
+  flex-shrink: 0;
+  animation: attachment-spin 1.2s linear infinite;
+}
+@keyframes attachment-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .attachment-spinner {
+    animation: none;
   }
 }

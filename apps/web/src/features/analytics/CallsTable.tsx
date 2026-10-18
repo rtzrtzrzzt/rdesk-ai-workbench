@@ -24,7 +24,9 @@ export function CallsTable({
             <th>状态</th>
             <th>输入 / 输出 tokens</th>
             <th>首段可见延迟</th>
-            <th>请求平均输出速率</th>
+            <th title="输出 tokens / 整个请求耗时，包含等待与输入处理，不是纯解码速度">
+              端到端输出速率
+            </th>
             <th>追溯</th>
           </tr>
         </thead>

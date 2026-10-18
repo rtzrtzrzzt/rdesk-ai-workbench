@@ -38,7 +38,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   if (generation !== identityGeneration)
     throw new DOMException('会话已改变，忽略旧会话响应。', 'AbortError')
   if (!response.ok) {
-    if (response.status === 401 && path !== '/auth/session' && path !== '/auth/login')
+    if (response.status === 401 && path !== '/auth/session' && path !== '/auth/bootstrap')
       window.dispatchEvent(new Event('workbench:unauthorized'))
     const error = body as { error?: { message?: string }; detail?: string } | undefined
     const message =

@@ -37,8 +37,6 @@ class Settings(BaseSettings):
     ssl_certfile: Path | None = None
     ssl_keyfile: Path | None = None
     session_idle_seconds: int = Field(default=1800, ge=60, le=86400)
-    login_max_failures: int = Field(default=10, ge=3, le=100)
-    login_window_seconds: int = Field(default=900, ge=60, le=3600)
     worker_lease_seconds: int = 60
     model_timeout_seconds: int = 180
     max_model_rounds: int = 24

@@ -2,7 +2,7 @@
 
 from_values is configuration-only: it performs no filesystem/network/SSL IO.
 validate_tls_files is the explicit, read-only startup certificate preflight.
-Identity, owner existence, CSRF and login limits remain application responsibilities.
+Identity, owner creation and CSRF remain application responsibilities.
 """
 
 from __future__ import annotations
@@ -174,7 +174,6 @@ class AccessPolicy:
     secure_cookies: bool
     ssl_certfile: Path | None
     ssl_keyfile: Path | None
-    startup_owner_required: bool
 
     @classmethod
     def from_values(
@@ -187,19 +186,22 @@ class AccessPolicy:
         ssl_certfile=None,
         ssl_keyfile=None,
     ):
-        """Pure parsing. Invalid LAN configuration fails; no implicit fallback."""
+        """Pure parsing. LAN configuration fails explicitly; no implicit fallback."""
         if type(port) is not int or not 1 <= port <= 65535:
             raise _fail("access_port_invalid", "监听端口必须是1至65535的整数。")
         if type(lan_enabled) is not bool or type(secure_cookies) is not bool:
             raise _fail("access_flag_invalid", "LAN与Secure Cookie配置必须是明确布尔值。")
+        if lan_enabled:
+            raise _fail(
+                "access_lan_disabled", "当前版本已停用局域网访问；请关闭LAN并使用回环监听。"
+            )
         host = _host(host)
-        try:
-            ipaddress.ip_address(host)
-        except ValueError:
-            if host != "localhost":
-                raise _fail(
-                    "access_bind_invalid", "bind只接受明确IP地址或本机localhost。"
-                ) from None
+        if not _loopback(host):
+            raise _fail("access_loopback_required", "本机工作台只允许回环监听地址。")
+        # Bind a literal address even for localhost configuration, so listener
+        # safety does not depend on local DNS/hosts resolution.
+        if host == "localhost":
+            host = "127.0.0.1"
         certificate, key = _path(ssl_certfile), _path(ssl_keyfile)
         if (certificate is None) != (key is None):
             raise _fail("access_tls_pair_required", "TLS证书和密钥必须同时配置。")
@@ -213,12 +215,6 @@ class AccessPolicy:
             raise _fail(
                 "access_origins_invalid", "公开来源必须是精确origin的列表，不能是通配或逗号字符串。"
             )
-        if not lan_enabled and not _loopback(host):
-            raise _fail("access_lan_not_enabled", "非回环监听必须显式启用LAN。")
-        if lan_enabled and (scheme != "https" or not public_origins):
-            raise _fail(
-                "access_lan_tls_required", "LAN必须显式配置HTTPS来源、证书密钥和Secure Cookie。"
-            )
         origins = []
         for value in public_origins:
             try:
@@ -231,7 +227,7 @@ class AccessPolicy:
                 raise _fail(
                     "access_origin_listener_mismatch", "直连来源必须与实际TLS协议及监听端口相同。"
                 )
-            if not lan_enabled and not _loopback(item[1]):
+            if not _loopback(item[1]):
                 raise _fail("access_lan_not_enabled", "回环模式不能配置远端来源。")
             canonical = _url(*item)
             if canonical not in origins:
@@ -240,7 +236,7 @@ class AccessPolicy:
             hosts = tuple(dict.fromkeys((*_LOOPBACK, host)))
             origins = [_url(scheme, item, port) for item in hosts]
         trusted = tuple(dict.fromkeys(_origin(item)[1] for item in origins))
-        dev = _DEV if not lan_enabled and scheme == "http" and not public_origins else ()
+        dev = _DEV if scheme == "http" and not public_origins else ()
         return cls(
             host,
             port,
@@ -252,7 +248,6 @@ class AccessPolicy:
             secure_cookies,
             certificate,
             key,
-            lan_enabled,
         )
 
     @property
@@ -272,6 +267,16 @@ class AccessPolicy:
             "ssl_certfile": str(self.ssl_certfile) if self.ssl_certfile else None,
             "ssl_keyfile": str(self.ssl_keyfile) if self.ssl_keyfile else None,
         }
+
+    def allows_peer(self, peer: str) -> bool:
+        """The actual socket address, never a forwarded header or DNS name."""
+        try:
+            address = ipaddress.ip_address(peer)
+            return address.is_loopback or bool(
+                getattr(address, "ipv4_mapped", None) and address.ipv4_mapped.is_loopback
+            )
+        except ValueError:
+            return False
 
     def allows_host(self, host_header: str, request_scheme: str) -> bool:
         """Use the actual ASGI scheme with uvicorn proxy_headers=False."""

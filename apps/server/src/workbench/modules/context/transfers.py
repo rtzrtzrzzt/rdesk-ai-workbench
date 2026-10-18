@@ -23,7 +23,12 @@ def private_artifacts(db, run_id):
         )
     )
     for references in db.scalars(select(Message.attachments).where(Message.run_id == run_id)):
-        identifiers.update(item["artifact_id"] for item in references or [])
+        identifiers.update(
+            item[key]
+            for item in references or []
+            for key in ("artifact_id", "source_artifact_id")
+            if item.get(key)
+        )
     identifiers.update(
         db.scalars(
             select(Artifact.id).where(
@@ -53,8 +58,10 @@ def allowed_result(db, target_run, source_run_id):
         select(Message.attachments).where(Message.run_id == target_run.id)
     ):
         approved.update(
-            item["artifact_id"]
+            item[key]
             for item in references or []
+            for key in ("artifact_id", "source_artifact_id")
+            if item.get(key)
             if item.get("consent_remote") and item.get("consent_target") == target
         )
     return sources <= approved

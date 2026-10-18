@@ -148,77 +148,96 @@ export function WorkspaceRuntimeDefaults({
                   ))}
                 </select>
               </label>
-              <div className="run-option-fields">
-                {runOptionFields.map((field) => {
-                  const inherited = current.options[field.key] == null
-                  return (
-                    <div className="workspace-runtime-option" key={field.key}>
-                      <label>
-                        {field.label}
-                        <select
-                          aria-label={`${field.label}来源`}
-                          value={inherited ? 'inherit' : 'override'}
-                          onChange={(event) => {
-                            const next = { ...current.options }
-                            next[field.key] =
-                              event.target.value === 'inherit'
-                                ? null
-                                : (query.data?.effective.options[field.key] ?? null)
-                            edit(next)
-                          }}
-                        >
-                          <option value="inherit">继承用户 / 系统</option>
-                          <option
-                            value="override"
-                            disabled={
-                              !validOption(field.key, query.data?.effective.options[field.key])
-                            }
-                          >
-                            工作区覆盖
-                          </option>
-                        </select>
-                      </label>
-                      {!inherited && (
+              <label>
+                审批方式
+                <select
+                  value={current.options.approval_mode ?? ''}
+                  onChange={(event) =>
+                    edit({
+                      ...current.options,
+                      approval_mode: (event.target.value || null) as 'smart' | 'manual' | null,
+                    })
+                  }
+                >
+                  <option value="">继承用户 / 系统</option>
+                  <option value="smart">智能审批</option>
+                  <option value="manual">手动审批</option>
+                </select>
+              </label>
+              <details className="runtime-advanced">
+                <summary>高级任务预算与执行设置</summary>
+                <div className="run-option-fields">
+                  {runOptionFields.map((field) => {
+                    const inherited = current.options[field.key] == null
+                    return (
+                      <div className="workspace-runtime-option" key={field.key}>
                         <label>
-                          覆盖值
-                          <input
-                            aria-label={`${field.label}工作区覆盖值`}
-                            type="number"
-                            min={field.min}
-                            max={field.max}
-                            step={field.integer ? 1 : 'any'}
-                            value={
-                              Number.isFinite(current.options[field.key])
-                                ? (current.options[field.key] ?? '')
-                                : ''
-                            }
+                          {field.label}
+                          <select
+                            aria-label={`${field.label}来源`}
+                            value={inherited ? 'inherit' : 'override'}
                             onChange={(event) => {
                               const next = { ...current.options }
                               next[field.key] =
-                                event.target.value === '' ? NaN : Number(event.target.value)
+                                event.target.value === 'inherit'
+                                  ? null
+                                  : (query.data?.effective.options[field.key] ?? null)
                               edit(next)
                             }}
-                            required
-                          />
+                          >
+                            <option value="inherit">继承用户 / 系统</option>
+                            <option
+                              value="override"
+                              disabled={
+                                !validOption(field.key, query.data?.effective.options[field.key])
+                              }
+                            >
+                              工作区覆盖
+                            </option>
+                          </select>
                         </label>
-                      )}
-                      <small>
-                        有效范围 {field.min}–{field.max}
-                        {inherited ? ' · 本项不保存覆盖值' : ''}
-                      </small>
-                    </div>
-                  )
-                })}
-              </div>
-              <SandboxSelect
-                value={current.options.sandbox_profile}
-                inherit
-                disabled={busy || conflict}
-                onChange={(sandbox_profile) => edit({ ...current.options, sandbox_profile })}
-              />
+                        {!inherited && (
+                          <label>
+                            覆盖值
+                            <input
+                              aria-label={`${field.label}工作区覆盖值`}
+                              type="number"
+                              min={field.min}
+                              max={field.max}
+                              step={field.integer ? 1 : 'any'}
+                              value={
+                                Number.isFinite(current.options[field.key])
+                                  ? (current.options[field.key] ?? '')
+                                  : ''
+                              }
+                              onChange={(event) => {
+                                const next = { ...current.options }
+                                next[field.key] =
+                                  event.target.value === '' ? NaN : Number(event.target.value)
+                                edit(next)
+                              }}
+                              required
+                            />
+                          </label>
+                        )}
+                        <small>
+                          有效范围 {field.min}–{field.max}
+                          {inherited ? ' · 本项不保存覆盖值' : ''}
+                        </small>
+                      </div>
+                    )
+                  })}
+                </div>
+                <SandboxSelect
+                  value={current.options.sandbox_profile}
+                  inherit
+                  disabled={busy || conflict}
+                  onChange={(sandbox_profile) => edit({ ...current.options, sandbox_profile })}
+                />
+              </details>
               <Button
                 onClick={() => {
-                  const options: RunOptionOverrides = { sandbox_profile: null }
+                  const options: RunOptionOverrides = { sandbox_profile: null, approval_mode: null }
                   runOptionFields.forEach((field) => {
                     options[field.key] = null
                   })

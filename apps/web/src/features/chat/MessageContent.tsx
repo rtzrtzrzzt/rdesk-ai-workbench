@@ -4,13 +4,29 @@ import { Check, Copy } from 'lucide-react'
 import Markdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { ManagedFileLink } from './FilePreview'
+import { createContext, useContext } from 'react'
+const WorkspaceContext = createContext<string | undefined>(undefined)
+function FileAnchor({ href, children }: { href: string; children?: ReactNode }) {
+  return (
+    <ManagedFileLink href={href} workspaceId={useContext(WorkspaceContext)}>
+      {children}
+    </ManagedFileLink>
+  )
+}
 
-type MessageText = { role: string; content?: string | null }
+type MessageText = { role: string; content?: string | null; reasoning?: string | null }
 
 /** Tool-call assistant records may have no visible text; attachment-only user messages remain visible. */
-export function shouldRenderMessage(message: MessageText, streamedContent?: string): boolean {
+export function shouldRenderMessage(
+  message: MessageText,
+  streamedContent?: string,
+  streamedReasoning?: string,
+): boolean {
   return (
-    message.role !== 'assistant' || (streamedContent ?? message.content ?? '').trim().length > 0
+    message.role !== 'assistant' ||
+    (streamedContent ?? message.content ?? '').trim().length > 0 ||
+    (streamedReasoning ?? message.reasoning ?? '').trim().length > 0
   )
 }
 
@@ -95,26 +111,13 @@ const components: Components = {
       </CodeBlock>
     )
   },
-  a({ node: _node, href, children, ...props }) {
+  a({ href, children }) {
     if (!href) return <span>{children}</span>
-    const external = /^(?:https?:)?\/\//i.test(href)
-    return (
-      <a
-        {...props}
-        href={href}
-        target={external ? '_blank' : undefined}
-        rel={external ? 'noopener noreferrer' : undefined}
-      >
-        {children}
-      </a>
-    )
+    return <FileAnchor href={href}>{children}</FileAnchor>
   },
   img({ src, alt }) {
-    // Markdown does not automatically fetch generated image URLs; managed attachments use their own preview flow.
     return typeof src === 'string' && src ? (
-      <a href={src} target="_blank" rel="noopener noreferrer">
-        {alt || '查看图片'}
-      </a>
+      <FileAnchor href={src}>{alt || '查看图片'}</FileAnchor>
     ) : (
       <span>{alt || '图片地址不可用'}</span>
     )
@@ -131,22 +134,26 @@ const components: Components = {
 export const MessageContent = memo(function MessageContent({
   content,
   role = 'assistant',
+  workspaceId,
 }: {
   content: string
   role?: string
+  workspaceId?: string
 }) {
   const markdownId = useId()
   if (role === 'user') return <div className="chat-message-text">{content}</div>
   return (
-    <div className="chat-markdown">
-      <Markdown
-        remarkPlugins={[remarkGfm]}
-        remarkRehypeOptions={{ clobberPrefix: `message-${markdownId}-` }}
-        components={components}
-        skipHtml
-      >
-        {content}
-      </Markdown>
-    </div>
+    <WorkspaceContext value={workspaceId}>
+      <div className="chat-markdown">
+        <Markdown
+          remarkPlugins={[remarkGfm]}
+          remarkRehypeOptions={{ clobberPrefix: `message-${markdownId}-` }}
+          components={components}
+          skipHtml
+        >
+          {content}
+        </Markdown>
+      </div>
+    </WorkspaceContext>
   )
 })

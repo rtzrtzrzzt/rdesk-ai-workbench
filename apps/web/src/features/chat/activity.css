@@ -1,0 +1,248 @@
+.tool-activity {
+  margin: 9px 0 9px 42px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tool-activity-heading {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.tool-activity-heading:hover,
+.tool-activity-heading:focus-visible {
+  background: var(--hover);
+  color: var(--fg);
+}
+.tool-activity-heading > svg {
+  flex: 0 0 auto;
+}
+.tool-activity-title {
+  flex-shrink: 0;
+  color: var(--fg);
+}
+.tool-activity-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tool-activity-heading > small {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.tool-activity-heading > .expanded,
+.message-thinking .expanded {
+  transform: rotate(90deg);
+}
+.tool-activity-details {
+  margin: 6px 0 12px 32px;
+  border-left: 1px solid var(--border);
+  padding: 4px 14px;
+  color: var(--fg);
+}
+.tool-activity-details summary {
+  padding: 7px 0;
+  cursor: pointer;
+  color: var(--muted);
+}
+.tool-activity-details pre {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface);
+}
+.tool-detail-name {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 5px 0;
+}
+.tool-sources {
+  display: grid;
+  gap: 10px;
+  padding: 8px 0;
+  list-style: none;
+}
+.tool-sources a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.tool-sources p,
+.tool-output-preview {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-failed,
+.tool-activity-error {
+  color: var(--danger);
+}
+.tool-activity-error {
+  margin: 3px 10px 8px 32px;
+  font-size: 12px;
+}
+.activity-read-error {
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.message-thinking {
+  margin-bottom: 12px;
+  color: var(--muted);
+}
+.message-thinking > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  cursor: pointer;
+  font-size: 12px;
+}
+.thinking-content {
+  max-height: 320px;
+  overflow: auto;
+  border-left: 2px solid var(--border);
+  padding: 4px 14px;
+  margin: 4px 0 14px;
+  font-size: 13px;
+}
+.thinking-content .chat-markdown {
+  color: var(--muted);
+  font-size: 13px;
+}
+.agent-entries {
+  margin: 12px 0 18px;
+}
+.agent-entries-label {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 0;
+}
+.agent-entries .child-agent {
+  margin: 8px 0;
+  padding: 0;
+  background: var(--surface);
+}
+.agent-entry {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  padding: 13px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.agent-entry:hover,
+.agent-entry:focus-visible {
+  background: var(--hover);
+}
+.agent-entry > strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.agent-entry > span:last-child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.agent-dialog {
+  width: min(900px, calc(100% - 32px));
+}
+.agent-transcript-status {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.subagent-transcript {
+  max-height: min(60dvh, 750px);
+  overflow: auto;
+  padding: 6px 14px 6px 0;
+  overscroll-behavior: contain;
+}
+.subagent-transcript .tool-activity {
+  margin-left: 0;
+}
+.subagent-transcript .chat-message {
+  margin: 18px 0;
+}
+.agent-task-input,
+.agent-technical {
+  font-size: 12px;
+  margin: 10px 0;
+}
+.agent-task-input summary,
+.agent-technical summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 8px 0;
+}
+.agent-task-input > div {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--surface);
+}
+.agent-technical .run-meta {
+  color: var(--muted);
+}
+.agent-technical pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 300px;
+  overflow: auto;
+  font-size: 11px;
+}
+@keyframes activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.activity-spin {
+  animation: activity-spin 1.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-spin {
+    animation: none;
+  }
+}
+@media (max-width: 600px) {
+  .tool-activity {
+    margin-left: 0;
+  }
+  .tool-activity-heading {
+    flex-wrap: wrap;
+  }
+  .tool-activity-summary {
+    flex-basis: 50%;
+    flex-grow: 1;
+  }
+  .agent-entry {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .agent-dialog .dialog-inner {
+    padding: 18px 16px;
+  }
+}

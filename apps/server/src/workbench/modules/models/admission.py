@@ -4,13 +4,14 @@ import asyncio
 from contextlib import asynccontextmanager
 
 import psycopg
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from workbench.config import get_settings
 from workbench.contracts.errors import AppError
-from workbench.infrastructure.database import engine
-from workbench.modules.runs.domain import Run
+from workbench.infrastructure.database import engine, now
+from workbench.modules.collaboration.domain import AgentMessage
+from workbench.modules.runs.domain import Job, Run, RunEvent
 from workbench.modules.runs.service import emit, set_status
 
 
@@ -26,6 +27,43 @@ def status(run_id, waiting):
         )
 
 
+def queue_turn(run_id):
+    """User updates take priority; normal generations follow persisted arrival order."""
+    with Session(engine()) as db:
+        interactive = (
+            select(AgentMessage.id)
+            .where(
+                AgentMessage.to_run_id == Run.id,
+                AgentMessage.source == "user",
+                AgentMessage.delivered_attempt_id.is_(None),
+            )
+            .correlate(Run)
+            .exists()
+        )
+        arrived = (
+            select(func.max(RunEvent.created_at))
+            .where(
+                RunEvent.run_id == Run.id,
+                RunEvent.type == "resource.waiting",
+            )
+            .correlate(Run)
+            .scalar_subquery()
+        )
+        first = db.scalar(
+            select(Run.id)
+            .join(Job, Job.run_id == Run.id)
+            .where(
+                Run.status == "waiting_resource",
+                Job.status == "running",
+                Job.lease_until > now(),
+                Run.cancel_requested_at.is_(None),
+            )
+            .order_by(interactive.desc(), arrived, Run.created_at, Run.id)
+            .limit(1)
+        )
+        return first == run_id
+
+
 @asynccontextmanager
 async def model_permit(run_id):
     # Capacity is an installation resource, not a connection name. Two aliases
@@ -33,17 +71,14 @@ async def model_permit(run_id):
     key = 82139706
     dsn = get_settings().database_dsn().replace("postgresql+psycopg://", "postgresql://", 1)
     async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as connection:
-        waiting = False
+        await asyncio.to_thread(status, run_id, True)
         while True:
-            cursor = await connection.execute("SELECT pg_try_advisory_lock(%s)", (key,))
-            if (await cursor.fetchone())[0]:
-                break
-            if not waiting:
-                await asyncio.to_thread(status, run_id, True)
-                waiting = True
-            await asyncio.sleep(0.25)
-        if waiting:
-            await asyncio.to_thread(status, run_id, False)
+            if await asyncio.to_thread(queue_turn, run_id):
+                cursor = await connection.execute("SELECT pg_try_advisory_lock(%s)", (key,))
+                if (await cursor.fetchone())[0]:
+                    break
+            await asyncio.sleep(0.1)
+        await asyncio.to_thread(status, run_id, False)
         cursor = await connection.execute("SELECT pg_backend_pid()")
         pid = (await cursor.fetchone())[0]
         parent = asyncio.current_task()

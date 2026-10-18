@@ -92,10 +92,15 @@ export function RunInteractions({
         target={approval.tool_name}
         scope={<ApprovalArguments approval={approval} />}
         impact="仅授权上方这一次操作。"
-        pending={available && approval.status === 'pending'}
+        review={approval.review}
+        pending={
+          available && approval.status === 'pending' && approval.review?.decision !== 'reviewing'
+        }
         resolvedLabel={
           approval.status === 'pending'
-            ? unavailableReason
+            ? approval.review?.decision === 'reviewing'
+              ? '正在审核，等待服务端结果'
+              : unavailableReason
             : approval.status === 'approved'
               ? '已允许本次操作'
               : approval.status === 'rejected'

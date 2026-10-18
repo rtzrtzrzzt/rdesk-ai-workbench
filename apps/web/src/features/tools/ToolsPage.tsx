@@ -15,19 +15,10 @@ type Scope = SearchConnectionSave['scope']
 const scopeLabel = (scope: Scope) => (scope === 'user' ? '用户级' : '当前工作区')
 const describeError = (error: unknown) =>
   error instanceof Error ? error.message : '请求未完成，请重试。'
-function payload(draft: SearchSettingsDraft): SearchConnectionSave {
-  return {
-    ...draft.settings,
-    engines: draft.enginesText
-      .split(/[,，]/)
-      .map((value) => value.trim())
-      .filter(Boolean),
-  }
-}
 function settingsValue(draft: SearchSettingsDraft) {
-  const { expected_version, ...settings } = payload(draft)
+  const { expected_version, ...settings } = draft.settings
   void expected_version
-  return JSON.stringify(settings)
+  return JSON.stringify({ ...settings, engineMode: draft.engineMode })
 }
 
 export function ToolsPage({
@@ -104,7 +95,7 @@ function ToolsWorkspace({ workspace, active }: { workspace: Workspace; active: b
     setSaving(true)
     setNotice('')
     try {
-      const updated = await searchApi.save(workspace.id, payload(draft))
+      const updated = await searchApi.save(workspace.id, draft.settings)
       client.setQueryData<SearchConnectionView | null>(
         ['search-connection', workspace.id, target],
         updated,
@@ -117,10 +108,22 @@ function ToolsWorkspace({ workspace, active }: { workspace: Workspace; active: b
       await client.invalidateQueries({ queryKey: ['search-capability', workspace.id] })
       setNotice(`${scopeLabel(target)}搜索连接已保存。请检查当前实际生效连接。`)
     } catch (error) {
+      const errorCode =
+        error instanceof ApiError
+          ? (error.body as { error?: { code?: string } } | undefined)?.error?.code
+          : undefined
+      // A directory failure happens before the configuration write, so the draft can be retried.
+      const beforeWrite =
+        errorCode?.startsWith('search_catalog_') ||
+        errorCode?.startsWith('search_http_') ||
+        errorCode === 'search_redirect_refused' ||
+        errorCode === 'search_access_denied' ||
+        errorCode === 'search_rate_limited' ||
+        errorCode?.startsWith('web_')
       const conflict =
         (error instanceof ApiError && error.status === 409) ||
         error instanceof TypeError ||
-        (error instanceof ApiError && error.status >= 500)
+        (error instanceof ApiError && error.status >= 500 && !beforeWrite)
       setDrafts((old) => ({
         ...old,
         [target]: {
@@ -293,6 +296,9 @@ function ToolsWorkspace({ workspace, active }: { workspace: Workspace; active: b
             <p className="page-note">正在读取此范围的真实配置…</p>
           ) : (
             <SearchConnectionForm
+              key={scope}
+              workspaceId={workspace.id}
+              active={active && expanded}
               draft={draft}
               connection={connection.data}
               busy={saving || checking || reloading}

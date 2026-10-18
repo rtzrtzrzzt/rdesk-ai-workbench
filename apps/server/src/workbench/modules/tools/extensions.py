@@ -22,7 +22,9 @@ def scope_for(run_id: str) -> tuple[str, str, str]:
         return run.user_id, run.workspace_id, "subagent" if run.parent_run_id else "agent"
 
 
-def discover(run_id: str, names: list[str]) -> dict:
+def discover(run_id: str, names: list[str], action: str = "add") -> dict:
+    if action not in {"add", "remove", "replace"}:
+        raise AppError("invalid_discovery_action", "工具加载操作必须为add、remove或replace。", 422)
     if any(name not in TOOLS for name in names):
         raise AppError("tool_not_registered", "请求加载的工具没有注册，请先查询目录。", 422)
     with Session(engine()) as db, db.begin():
@@ -35,28 +37,45 @@ def discover(run_id: str, names: list[str]) -> dict:
             raise AppError("tool_scope_denied", "子任务不能加载父级未授予的工具。", 403, "policy")
         connection = search.get_connection(db, run.user_id, run.workspace_id)
         web_enabled = bool(connection and connection.enabled)
-        if any(TOOLS[name].module == "search" for name in names) and not web_enabled:
+        if (
+            action != "remove"
+            and any(TOOLS[name].module == "search" for name in names)
+            and not web_enabled
+        ):
             raise AppError(
                 "search_disabled",
                 "先由用户在工具设置中配置并启用搜索，模型不能自行启用。",
                 409,
                 "policy",
             )
-        if names:
+        current = (
+            set(run.config_snapshot.get("tool_names", CORE_TOOL_NAMES)) & permitted & set(TOOLS)
+        )
+        if names or action != "add":
+            requested = set(names)
+            if action == "add":
+                selected = current | requested
+            elif action == "remove":
+                selected = current - requested
+            else:
+                selected = requested
             enabled = [name for name in CORE_TOOL_NAMES if name in permitted] + sorted(
-                set(names) - set(CORE_TOOL_NAMES)
+                selected - set(CORE_TOOL_NAMES)
             )
             run.config_snapshot = {**run.config_snapshot, "tool_names": enabled}
-            emit(db, run_id, "tools.loaded", {"names": enabled})
+            emit(db, run_id, "tools.loaded", {"names": enabled, "action": action})
         else:
-            enabled = run.config_snapshot.get("tool_names", CORE_TOOL_NAMES)
+            enabled = [name for name in CORE_TOOL_NAMES if name in current] + sorted(
+                current - set(CORE_TOOL_NAMES)
+            )
         result = {
             "loaded": enabled,
             "note": (
-                "工具已在下一次模型请求的tools中提供，可直接调用；填写names会替换额外工具集合。"
+                "loaded是下一轮模型请求的工具集合；新工具schema届时才提供，"
+                "本轮不能同时调用尚未加载的工具。默认增量保留已有工具，卸载或替换须显式指定action。"
             ),
         }
-        if not names:
+        if not names and action == "add":
             result["catalog"] = [
                 {
                     "name": name,
@@ -148,6 +167,10 @@ def memory_propose(run_id: str, operation_id: str, values: dict) -> dict:
 
 
 def artifact_tool(run_id: str, operation_id: str, name: str, values: dict) -> dict:
+    if name == "present_file":
+        from workbench.modules.files.links import present_file
+
+        return present_file(run_id, operation_id, values)
     from workbench.modules.files import service as files
     from workbench.modules.files.exports import create_export
     from workbench.modules.files.exports_dto import ExportCreate
@@ -185,9 +208,8 @@ def artifact_tool(run_id: str, operation_id: str, name: str, values: dict) -> di
 
 def context_tool(run_id, name, values):
     from workbench.modules.context.compiler import filter_memory
-    from workbench.modules.context.memory_refs import dependencies
+    from workbench.modules.context.memory_refs import context_dependencies, dependencies
     from workbench.modules.context.transfers import filter_artifact_transfer
-    from workbench.modules.conversations import Message
 
     with Session(engine()) as db:
         run = db.get(Run, run_id)
@@ -208,18 +230,22 @@ def context_tool(run_id, name, values):
             raise AppError(
                 "history_scope_denied", "只能读取当前任务树内的实际会话。", 403, "policy"
             )
-        rows = list(
-            db.scalars(
-                select(Message)
-                .where(Message.thread_id == target.thread_id)
-                .order_by(Message.created_at, Message.id)
-                .offset(values["start_message"] - 1)
-                .limit(values["limit"] + 1)
-            )
-        )
+        from workbench.modules.conversation_service import get_thread, history_rows
+
+        history = history_rows(db, get_thread(db, run.user_id, target.thread_id))
+        if values.get("message_id"):
+            matches = [row for row in history if row.id == str(values["message_id"])]
+            if not matches:
+                raise AppError("history_message_not_found", "消息不属于此授权对话历史。", 404)
+            rows = matches
+        else:
+            rows = history[
+                values["start_message"] - 1 : values["start_message"] - 1 + values["limit"] + 1
+            ]
         results = []
         references = set()
-        for row in rows[: values["limit"]]:
+        context_references = {}
+        for position, row in enumerate(rows[: values["limit"]]):
             filtered = filter_artifact_transfer(
                 db,
                 run,
@@ -229,19 +255,30 @@ def context_tool(run_id, name, values):
             )
             content = filtered["content"]
             if row.role == "tool":
+                for item in context_dependencies(content):
+                    context_references[(item.get("workspace_id"), item.get("fingerprint"))] = item
                 references.update((item["id"], item["version"]) for item in dependencies(content))
                 if len(references) > 2048:
                     raise AppError(
                         "history_reference_limit", "历史片段的记忆来源过多，请缩小读取范围。", 422
                     )
+            start = values.get("start_character", 0) if position == 0 else 0
+            end = min(len(content), start + values["max_chars"])
+            if start > len(content):
+                raise AppError(
+                    "history_cursor_invalid", "字符游标超过消息正文长度，请从原始位置重读。", 422
+                )
             results.append(
                 {
                     "message_id": row.id,
                     "run_id": row.run_id,
                     "role": row.role,
                     "status": row.status,
-                    "content": content[: values["max_chars"]],
-                    "truncated": len(content) > values["max_chars"],
+                    "content": content[start:end],
+                    "start_character": start,
+                    "next_character": end if end < len(content) else None,
+                    "total_characters": len(content),
+                    "truncated": end < len(content),
                     "attachments": row.attachments,
                 }
             )
@@ -250,6 +287,7 @@ def context_tool(run_id, name, values):
             "memory_dependencies": [
                 {"id": identifier, "version": version} for identifier, version in sorted(references)
             ],
+            "context_memory_dependencies": list(context_references.values()),
             "more": len(rows) > values["limit"],
             "next_message": values["start_message"] + len(results),
         }
@@ -413,7 +451,9 @@ async def execute(run_id: str, operation_id: str, name: str, values: dict) -> di
         with Session(engine()) as db:
             return agents.tree(db, user_id, run_id)
     if name == "discover_tools":
-        return await asyncio.to_thread(discover, run_id, values["names"])
+        return await asyncio.to_thread(
+            discover, run_id, values["names"], values.get("action", "add")
+        )
     if name == "memory_search":
         return await asyncio.to_thread(memory_search, run_id, values)
     if name == "memory_read":

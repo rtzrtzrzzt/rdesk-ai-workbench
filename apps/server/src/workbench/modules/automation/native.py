@@ -67,6 +67,12 @@ def publish_native(identifier, native_view):
 
 
 class GovernedBrowser(BrowserService):
+    async def forget(self, owner, session_id):
+        from workbench.modules.automation.forget import assert_native_forget
+
+        await asyncio.to_thread(assert_native_forget, owner, session_id, "browser")
+        return await super().forget(owner, session_id, durable_closed=True)
+
     async def create(self, owner, command):
         row, _, policy = await asyncio.to_thread(
             native_session, owner, command_id=command.request_id
@@ -92,6 +98,12 @@ class GovernedBrowser(BrowserService):
 
 
 class GovernedDesktop(DesktopService):
+    async def forget(self, owner, session_id):
+        from workbench.modules.automation.forget import assert_native_forget
+
+        await asyncio.to_thread(assert_native_forget, owner, session_id, "desktop")
+        return await super().forget(owner, session_id, durable_closed=True)
+
     async def create(self, owner, command, grant):
         row, policy, config = await asyncio.to_thread(
             native_session, owner, command_id=command.request_id

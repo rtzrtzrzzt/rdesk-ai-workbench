@@ -5,6 +5,23 @@ import json
 from workbench.contracts.errors import AppError
 
 
+def context_dependencies(content: str) -> list[dict]:
+    try:
+        value = json.loads(content)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(value, dict) or value.get("error") is not None:
+        return []
+    items = value.get("context_memory_dependencies") or []
+    if (
+        not isinstance(items, list)
+        or len(items) > 2048
+        or any(not isinstance(item, dict) for item in items)
+    ):
+        raise AppError("history_reference_limit", "上下文来源记录过多或无效，请缩小读取范围。", 422)
+    return items
+
+
 def dependencies(content: str) -> list[dict]:
     try:
         value = json.loads(content)

@@ -39,6 +39,22 @@ def has_pending_inputs(db, run_id):
     )
 
 
+def has_new_user_input(db, run_id, included=()):
+    return (
+        db.scalar(
+            select(AgentMessage.id)
+            .where(
+                AgentMessage.to_run_id == run_id,
+                AgentMessage.source == "user",
+                AgentMessage.delivered_attempt_id.is_(None),
+                AgentMessage.id.not_in(included),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def mark_delivered(db, run_id, attempt):
     delivered = []
     for row in db.scalars(

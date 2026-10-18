@@ -8,6 +8,18 @@ from workbench.contracts.base import PublicResponse
 from workbench.contracts.requests import Command
 
 
+class PresentFile(Command):
+    path: str | None = Field(default=None, min_length=1, max_length=4096)
+    artifact_id: UUID | None = None
+    version: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def one_source(self):
+        if (self.path is None) == (self.artifact_id is None):
+            raise ValueError("path 和 artifact_id 必须恰好提供一项。")
+        return self
+
+
 class UploadCreate(Command):
     filename: Annotated[str, StringConstraints(min_length=1, max_length=255)]
     total_bytes: int = Field(ge=0, le=1_073_741_824, strict=True)

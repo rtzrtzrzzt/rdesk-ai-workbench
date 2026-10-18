@@ -8,6 +8,10 @@ from workbench.contracts.errors import AppError
 from workbench.infrastructure.database import now
 from workbench.infrastructure.secrets import decrypt, encrypt
 from workbench.modules.models.domain import ModelConnection, ModelRevision
+from workbench.modules.models.engine_adapters import (
+    supported_reasoning_efforts,
+    validate_generation,
+)
 from workbench.modules.models.managed import default_connection
 from workbench.modules.models.profile import (
     CAPABILITIES,
@@ -31,6 +35,14 @@ def view(row: ModelConnection) -> dict:
         "capabilities": normalized(row.capabilities),
         "adapter_routes": adapter_route_matrix(row.provider_type),
         "generation": Generation.model_validate(row.generation or {}).model_dump(mode="json"),
+        "reasoning_efforts": supported_reasoning_efforts(
+            {
+                "provider_type": row.provider_type,
+                "endpoint": row.endpoint,
+                "model_identifier": row.model_identifier,
+                "generation": row.generation or {},
+            }
+        ),
         "version": row.version,
     }
 
@@ -76,6 +88,9 @@ def create(db: Session, user_id: str, values: dict) -> dict:
     endpoint = validate_endpoint(
         values["endpoint"], values.get("allow_remote", False), enforce_policy=False
     )
+    values["generation"] = validate_generation(
+        values["provider_type"], endpoint, values["model_identifier"], values.get("generation")
+    )
     row = ModelConnection(
         user_id=user_id,
         **{**values, "endpoint": endpoint},
@@ -104,6 +119,12 @@ def update(db: Session, user_id: str, connection_id: str, values: dict) -> dict:
     key, clear = values.pop("api_key", None), values.pop("clear_api_key", False)
     values["endpoint"] = validate_endpoint(
         values["endpoint"], values["allow_remote"], enforce_policy=False
+    )
+    values["generation"] = validate_generation(
+        values["provider_type"],
+        values["endpoint"],
+        values["model_identifier"],
+        values.get("generation"),
     )
     changed = any(
         getattr(row, key) != values[key]

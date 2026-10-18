@@ -47,10 +47,14 @@ class Declaration(BaseModel):
 
 class Generation(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    max_output_tokens: int = Field(default=2048, ge=64, le=131072, strict=True)
+    # None lets execution allocate the remaining total context to generation.
+    max_output_tokens: int | None = Field(default=None, ge=64, le=131072, strict=True)
     timeout_seconds: int = Field(default=180, ge=5, le=1800, strict=True)
     temperature: float | None = Field(default=None, ge=0, le=2)
     cache_observation: Literal["standard", "sglang"] = "standard"
+    engine_kind: Literal["auto", "sglang", "vllm", "llama_cpp", "tensorrt_llm", "other"] = "auto"
+    thinking_mode: Literal["default", "enabled", "disabled"] = "default"
+    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
 
 
 def normalized(values: dict) -> dict:

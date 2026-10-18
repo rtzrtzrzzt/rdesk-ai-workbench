@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DTO(BaseModel):
@@ -57,7 +57,6 @@ class CleanupResult(DTO):
 class RestoreCreate(DTO):
     request_id: UUID
     backup_id: UUID
-    restored_owner_password: SecretStr = Field(min_length=12, max_length=1024)
     timeout_seconds: int = Field(default=3600, ge=60, le=86400)
 
 

@@ -295,12 +295,6 @@ def start(open_browser: bool) -> None:
                 )
                 engine.cache_clear()
             migrate()
-            if policy.startup_owner_required:
-                from workbench.modules.identity_service import has_owner
-
-                with Session(engine()) as db:
-                    if not has_owner(db):
-                        raise SystemExit("请先用回环地址初始化所有者，再开启局域网HTTPS访问。")
             for component in ("vault-broker", "api", "worker", "file-worker"):
                 if component in state and process_matches(state[component]):
                     continue

@@ -29,10 +29,8 @@ from workbench.contracts.requests import (
     CapabilitiesUpdate,
     EmptyCommand,
     InputPlan,
-    Login,
     ModelCreate,
     ModelUpdate,
-    OwnerCreate,
     QuestionAnswer,
     RunCreate,
     ThreadCreate,
@@ -68,6 +66,7 @@ from workbench.entrypoints.routes.account import router as account_router
 from workbench.entrypoints.routes.analytics import router as analytics_router
 from workbench.entrypoints.routes.automation import router as automation_router
 from workbench.entrypoints.routes.collaboration import router as collaboration_router
+from workbench.entrypoints.routes.conversations import router as conversations_router
 from workbench.entrypoints.routes.credentials import router as credentials_router
 from workbench.entrypoints.routes.diagnostics import router as diagnostics_router
 from workbench.entrypoints.routes.files import router as files_router
@@ -84,11 +83,16 @@ from workbench.infrastructure.http_limits import BodyLimitMiddleware
 from workbench.infrastructure.mutations import write_gate
 from workbench.infrastructure.secrets import csrf_token
 from workbench.modules import conversation_service, identity_service, workspace_service
+from workbench.modules.collaboration.dto import InputReceived
+from workbench.modules.context.dto import ContextView
+from workbench.modules.conversation_dto import DeletionView, EditedThread, QueueItem, QueueView
 from workbench.modules.files.inputs import ArtifactInputPlan, input_plan
 from workbench.modules.identity import User
 from workbench.modules.models import service as model_service
 from workbench.modules.runs import service as run_service
 from workbench.modules.runs.domain import ClientRequest, Run, RunEvent, WorkerHeartbeat
+from workbench.modules.workspace_directories import DirectoryListing
+from workbench.modules.workspace_directories import browse as browse_directories
 
 ACCESS = get_settings().access_policy()
 DIST = get_settings().frontend_dir or PROJECT_ROOT / "apps/web/dist"
@@ -97,10 +101,8 @@ DIST = get_settings().frontend_dir or PROJECT_ROOT / "apps/web/dist"
 @asynccontextmanager
 async def lifespan(application):
     await asyncio.to_thread(ACCESS.validate_tls_files)
-    if ACCESS.startup_owner_required:
-        with Session(engine()) as db:
-            if not identity_service.has_owner(db):
-                raise RuntimeError("启用局域网前，必须先在回环地址完成所有者初始化。")
+    with Session(engine()) as db, db.begin():
+        identity_service.ensure_owner(db)
     yield
 
 
@@ -151,6 +153,8 @@ async def security_and_trace(request: Request, call_next):
     request.state.trace_id = str(uuid4())
     gate = None
     try:
+        if not request.client or not ACCESS.allows_peer(request.client.host):
+            raise AppError("local_peer_required", "仅允许本机回环连接访问工作台。", 403, "policy")
         host = request.headers.get("host", "")
         if not ACCESS.allows_host(host, request.url.scheme):
             raise AppError("invalid_host", "请求地址不符合已配置的工作台访问来源。", 400, "policy")
@@ -269,27 +273,9 @@ def setup_status():
     return {"configured": configured, "database_ready": ready, "version": __version__}
 
 
-@api.post("/setup/owner", status_code=201, response_model=OwnerSession)
-def initialize(command: OwnerCreate, request: Request, response: Response, db: DB):
-    if not request.client or request.client.host not in {"127.0.0.1", "::1"}:
-        raise AppError("setup_local_only", "首次初始化只能在本机完成。", 403, "policy")
-    user, token = identity_service.create_owner(
-        db, command.username, command.password.get_secret_value()
-    )
-    result = _identity(user, token)
-    db.commit()
-    _set_cookie(response, token)
-    return result
-
-
-@api.post("/auth/login", response_model=OwnerSession)
-def login(command: Login, request: Request, response: Response, db: DB):
-    user, token = identity_service.login(
-        db,
-        command.username,
-        command.password.get_secret_value(),
-        peer=request.client.host if request.client else None,
-    )
+@api.post("/auth/bootstrap", response_model=OwnerSession)
+def bootstrap(command: EmptyCommand, request: Request, response: Response, db: DB):
+    user, token = identity_service.bootstrap(db, request.cookies.get(COOKIE))
     result = _identity(user, token)
     db.commit()
     _set_cookie(response, token)
@@ -313,6 +299,16 @@ def logout(command: EmptyCommand, request: Request, response: Response, db: DB, 
 @api.get("/workspaces", response_model=list[Workspace])
 def workspaces(db: DB, user: USER, include_archived: bool = False):
     return workspace_service.list_workspaces(db, user.id, include_archived=include_archived)
+
+
+@api.get("/workspace-directories", response_model=DirectoryListing)
+def workspace_directories(
+    user: USER,
+    path: str | None = Query(default=None, max_length=4096),
+    show_hidden: bool = False,
+    after: str | None = Query(default=None, max_length=255),
+):
+    return browse_directories(path, show_hidden=show_hidden, after=after)
 
 
 @api.post("/workspaces", status_code=201, response_model=Workspace)
@@ -461,7 +457,11 @@ def runs(thread_id: UUID, request: Request, db: SNAPSHOT):
     conversation_service.get_thread(db, user.id, str(thread_id))
     rows = db.scalars(
         select(Run)
-        .where(Run.thread_id == str(thread_id), Run.user_id == user.id)
+        .where(
+            Run.thread_id == str(thread_id),
+            Run.user_id == user.id,
+            Run.kind != "context_compaction",
+        )
         .order_by(Run.created_at.desc())
     ).all()
     return [run_service.view(db, row) for row in rows]
@@ -527,7 +527,17 @@ def decide_approval(approval_id: UUID, command: ApprovalDecision, db: DB, user: 
     return result
 
 
-@api.get("/requests/{request_id}", response_model=RequestResult, response_model_exclude_unset=True)
+@api.get(
+    "/requests/{request_id}",
+    response_model=RequestResult
+    | QueueItem
+    | QueueView
+    | EditedThread
+    | DeletionView
+    | InputReceived
+    | ContextView,
+    response_model_exclude_unset=True,
+)
 def request_record(request_id: UUID, request: Request, db: SNAPSHOT):
     user = _authenticate(request, db)
     record = db.scalar(
@@ -737,7 +747,7 @@ def _contract_openapi() -> dict:
     schemes = schema.setdefault("components", {}).setdefault("securitySchemes", {})
     schemes["SessionCookie"] = {"type": "apiKey", "in": "cookie", "name": COOKIE}
     schemes["CSRFToken"] = {"type": "apiKey", "in": "header", "name": "X-CSRF-Token"}
-    public = {"/api/v1/setup/status", "/api/v1/setup/owner", "/api/v1/auth/login"}
+    public = {"/api/v1/setup/status", "/api/v1/auth/bootstrap"}
     for path, operations in schema.get("paths", {}).items():
         if not path.startswith("/api/v1/") or path in public:
             continue
@@ -764,6 +774,7 @@ app.include_router(generated_router)
 app.include_router(search_router)
 app.include_router(analytics_router)
 app.include_router(collaboration_router)
+app.include_router(conversations_router)
 app.include_router(credentials_router)
 app.include_router(maintenance_router)
 app.include_router(diagnostics_router)

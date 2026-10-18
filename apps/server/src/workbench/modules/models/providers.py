@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import hashlib
 import json
 import math
 from collections.abc import AsyncIterator
@@ -37,15 +38,42 @@ class ProviderConfig:
     api_key: str | None = None
     credential_ciphertext: str | None = None
     max_output_tokens: int = 4096
+    context_window: int = 8192
     timeout_seconds: float = 180
     temperature: float | None = None
     cache_observation: str = "standard"
+    request_id: str | None = None
+    engine_kind: str = "auto"
+    thinking_mode: str = "default"
+    reasoning_effort: str | None = None
 
 
 @dataclass
 class ProviderEvent:
     kind: str
     data: dict
+
+
+def visible_reasoning(saved: dict | None) -> str:
+    """Only provider-published readable text may cross the public DTO boundary."""
+    if not isinstance(saved, dict) or not isinstance(saved.get("output"), list):
+        return ""
+    parts = []
+    for item in saved["output"]:
+        if not isinstance(item, dict):
+            continue
+        if saved.get("provider_type") == "anthropic" and item.get("type") == "thinking":
+            if isinstance(item.get("thinking"), str):
+                parts.append(item["thinking"])
+        elif saved.get("provider_type") == "openai_responses" and item.get("type") == "reasoning":
+            for part in item.get("summary", []) or item.get("content", []):
+                if isinstance(part, dict) and part.get("type") in {
+                    "summary_text",
+                    "reasoning_text",
+                }:
+                    if isinstance(part.get("text"), str):
+                        parts.append(part["text"])
+    return "\n\n".join(parts)
 
 
 def _error(code: str, message: str, *, retryable: bool = False) -> AppError:
@@ -201,21 +229,59 @@ def _tools(tools: list[dict]) -> dict[str, dict]:
     return result
 
 
-def _tool_event(call: dict, allowed: dict) -> ProviderEvent:
+def _tool_identity_error(call, allowed, reason, provider, call_index):
+    messages = {
+        "unknown_tool_name": "模型调用了本次请求未提供的工具。",
+        "invalid_tool_name": "模型返回了无效的工具名称。",
+        "missing_call_id": "模型工具调用缺少调用 ID。",
+        "invalid_call_id": "模型工具调用 ID 格式无效。",
+        "duplicate_call_id": "模型返回了重复的工具调用 ID。",
+    }
+    name = call.get("name")
+    details = {
+        "reason": reason,
+        "provider": provider[:40],
+        "call_index": call_index,
+        "allowed_tool_count": len(allowed),
+        "allowed_tools_fingerprint": hashlib.sha256(_json(sorted(allowed)).encode()).hexdigest(),
+    }
+    if isinstance(name, str):
+        details["tool_name"] = "".join(char if char.isprintable() else "?" for char in name[:128])
+        details["tool_name_truncated"] = len(name) > 128
+    return AppError(
+        "provider_tool_identity", messages[reason], status=502, kind="provider", details=details
+    )
+
+
+def _tool_event(call: dict, allowed: dict, provider: str, call_index: int) -> ProviderEvent:
     identifier, name = call.get("id"), call.get("name")
-    if not isinstance(identifier, str) or not identifier or name not in allowed:
-        raise _error("provider_tool_identity", "模型返回未知工具或缺少工具调用 ID。")
+    reason = None
+    if identifier is None or identifier == "":
+        reason = "missing_call_id"
+    elif not isinstance(identifier, str):
+        reason = "invalid_call_id"
+    elif not isinstance(name, str) or not name:
+        reason = "invalid_tool_name"
+    elif name not in allowed:
+        reason = "unknown_tool_name"
+    if reason:
+        raise _tool_identity_error(call, allowed, reason, provider, call_index)
     return ProviderEvent(
         "tool_call",
         {"id": identifier, "name": name, "arguments": _arguments(call.get("arguments"))},
     )
 
 
-def _complete_calls(calls: list[dict], allowed: dict) -> list[ProviderEvent]:
-    result = [_tool_event(call, allowed) for call in calls]
-    identifiers = [event.data["id"] for event in result]
-    if len(set(identifiers)) != len(identifiers):
-        raise _error("provider_tool_identity", "模型返回了重复的工具调用 ID。")
+def _complete_calls(calls: list[dict], allowed: dict, provider: str) -> list[ProviderEvent]:
+    # Validate the entire batch before exposing any executable call to the caller.
+    result = []
+    identifiers = set()
+    for index, call in enumerate(calls):
+        event = _tool_event(call, allowed, provider, index)
+        if event.data["id"] in identifiers:
+            raise _tool_identity_error(call, allowed, "duplicate_call_id", provider, index)
+        identifiers.add(event.data["id"])
+        result.append(event)
     return result
 
 
@@ -319,6 +385,8 @@ def _anthropic_input(messages: list[dict]) -> tuple[list[dict], list[dict]]:
 
 
 def _request(config: ProviderConfig, messages: list[dict], tools: list[dict]):
+    from workbench.modules.models.engine_adapters import request_options, resolve_engine
+
     provider = PROVIDERS.get(config.provider_type)
     if not provider:
         raise _error("provider_unknown", "模型 API 协议类型不受支持。")
@@ -389,6 +457,8 @@ def _request(config: ProviderConfig, messages: list[dict], tools: list[dict]):
             body["tools"] = tools
         if config.cache_observation == "sglang":
             body["return_cached_tokens_details"] = True
+        if resolve_engine(config) == "sglang" and config.request_id:
+            body["rid"] = config.request_id
     else:
         system, converted = _anthropic_input(messages)
         body.update(messages=converted, max_tokens=config.max_output_tokens)
@@ -404,6 +474,7 @@ def _request(config: ProviderConfig, messages: list[dict], tools: list[dict]):
                 }
                 for name, function in allowed.items()
             ]
+    body.update(request_options(config))
     if config.temperature is not None:
         body["temperature"] = config.temperature
     payload = _json(body).encode()
@@ -482,6 +553,8 @@ def _usage(provider: str, raw: dict) -> ProviderEvent:
         read = _count(inputs.get("cached_tokens"))
         write = _count(inputs.get("cache_write_tokens"))
         reasoning = _count(outputs.get("reasoning_tokens"))
+        if reasoning is None:
+            reasoning = _count(raw.get("reasoning_tokens"))
     return ProviderEvent(
         "usage",
         {
@@ -553,9 +626,7 @@ async def _chat(
         if raw == "[DONE]":
             if not finish:
                 raise _protocol("Chat 流缺少明确结束原因。")
-            complete = _complete_calls([call for _, call in sorted(calls.items())], allowed)
-            if bool(complete) != (finish == "tool_calls"):
-                raise _protocol("工具调用未以 tool_calls 正常结束。")
+            truncated = finish in {"length", "max_tokens", "max_output_tokens"}
             if usage is not None:
                 event = _usage("openai_compatible", usage)
                 if cache_observation == "sglang":
@@ -570,9 +641,20 @@ async def _chat(
                         event.data["cache_details"] = cache_details
                         event.data["cache_source"] = "sglang.request.cached_tokens_details"
                 yield event
+            complete = (
+                []
+                if truncated
+                else _complete_calls(
+                    [call for _, call in sorted(calls.items())], allowed, "openai_compatible"
+                )
+            )
+            if not truncated and bool(complete) != (finish == "tool_calls"):
+                raise _protocol("工具调用未以 tool_calls 正常结束。")
             for call in complete:
                 yield call
-            yield ProviderEvent("done", {"finish_reason": finish})
+            yield ProviderEvent(
+                "done", {"finish_reason": finish, "partial_tool_calls": truncated and bool(calls)}
+            )
             return
         value = _object(_load(raw))
         if "error" in value:
@@ -586,6 +668,8 @@ async def _chat(
             if choice.get("index", 0) != 0:
                 raise _protocol("适配器仅接受单个模型输出候选。")
             delta = _object(choice.get("delta") or {})
+            if delta.get("reasoning_content") is not None:
+                yield ProviderEvent("reasoning_delta", {"delta": _text(delta["reasoning_content"])})
             if delta.get("content") is not None:
                 yield ProviderEvent("text_delta", {"delta": _text(delta["content"])})
             if delta.get("function_call"):
@@ -602,6 +686,8 @@ async def _chat(
                     call["name"] = _append(call["name"], function["name"], 512)
                 if function.get("arguments") is not None:
                     call["arguments"] = _append(call["arguments"], function["arguments"])
+                if function.get("name") or function.get("arguments"):
+                    yield ProviderEvent("progress", {})
             if choice.get("finish_reason"):
                 finish = _text(choice["finish_reason"])
     raise _protocol("Chat 流在 [DONE] 终止标记前断开。")
@@ -609,6 +695,8 @@ async def _chat(
 
 async def _responses(events, allowed: dict) -> AsyncIterator[ProviderEvent]:
     items, arguments = {}, {}
+    reasoning_streamed = False
+    reasoning_part = None
     async for event, raw in events:
         if raw == "[DONE]":
             raise _protocol("Responses 流缺少 response.completed。")
@@ -617,15 +705,34 @@ async def _responses(events, allowed: dict) -> AsyncIterator[ProviderEvent]:
         if kind in ("error", "response.failed"):
             raise _remote_error(400, value.get("response", value))
         if kind == "response.incomplete":
+            response = _object(value.get("response") or {})
+            if response.get("usage") is not None:
+                yield _usage("openai_responses", _object(response["usage"]))
+            if (response.get("incomplete_details") or {}).get("reason") == "max_output_tokens":
+                raise AppError(
+                    "model_output_limit",
+                    "模型达到输出上限，已保留部分结果，请调整预算后继续。",
+                    422,
+                    "budget",
+                )
             raise _error("provider_incomplete", "模型响应未完整完成；请检查输出预算或服务限制。")
         if kind == "response.output_text.delta":
             yield ProviderEvent("text_delta", {"delta": _text(value.get("delta"))})
+        elif kind in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
+            part = (value.get("item_id"), value.get("summary_index", value.get("content_index")))
+            text = _text(value.get("delta"))
+            if reasoning_streamed and part != reasoning_part:
+                text = "\n\n" + text
+            reasoning_streamed, reasoning_part = True, part
+            yield ProviderEvent("reasoning_delta", {"delta": text})
         elif kind == "response.output_item.done":
             index = _index(value.get("output_index"))
             items[index] = _object(value.get("item"))
         elif kind == "response.function_call_arguments.delta":
             index = _index(value.get("output_index"))
             arguments[index] = _append(arguments.get(index, ""), value.get("delta"))
+            if value.get("delta"):
+                yield ProviderEvent("progress", {})
         elif kind == "response.completed":
             response = _object(value.get("response"))
             if response.get("status") != "completed":
@@ -650,6 +757,8 @@ async def _responses(events, allowed: dict) -> AsyncIterator[ProviderEvent]:
             if any(index >= len(output) for index in items):
                 raise _protocol("Responses 最终输出丢失已完成内容块。")
             _bounded(output, MAX_STREAM_BYTES)
+            if response.get("usage") is not None:
+                yield _usage("openai_responses", _object(response["usage"]))
             complete = _complete_calls(
                 [
                     {
@@ -661,12 +770,21 @@ async def _responses(events, allowed: dict) -> AsyncIterator[ProviderEvent]:
                     if item.get("type") == "function_call"
                 ],
                 allowed,
+                "openai_responses",
             )
             yield ProviderEvent(
                 "provider_output", {"provider_type": "openai_responses", "output": output}
             )
-            if response.get("usage") is not None:
-                yield _usage("openai_responses", _object(response["usage"]))
+            if not reasoning_streamed:
+                text = visible_reasoning({"provider_type": "openai_responses", "output": output})
+                if text:
+                    yield ProviderEvent("reasoning_delta", {"delta": text})
+            for item in output:
+                if item.get("type") == "message" and item.get("phase") in {
+                    "commentary",
+                    "final_answer",
+                }:
+                    yield ProviderEvent("message_phase", {"phase": item["phase"]})
             for call in complete:
                 yield call
             yield ProviderEvent("done", {"finish_reason": "tool_calls" if complete else "stop"})
@@ -697,6 +815,8 @@ async def _anthropic(events, allowed: dict) -> AsyncIterator[ProviderEvent]:
             blocks[index], open_blocks = dict(block), open_blocks | {index}
             if block.get("type") == "text" and block.get("text"):
                 yield ProviderEvent("text_delta", {"delta": _text(block["text"])})
+            elif block.get("type") == "thinking" and block.get("thinking"):
+                yield ProviderEvent("reasoning_delta", {"delta": _text(block["thinking"])})
         elif kind == "content_block_delta":
             index = _index(value.get("index"))
             if index not in open_blocks:
@@ -708,12 +828,16 @@ async def _anthropic(events, allowed: dict) -> AsyncIterator[ProviderEvent]:
                 yield ProviderEvent("text_delta", {"delta": _text(delta["text"])})
             elif delta_type == "input_json_delta" and block.get("type") == "tool_use":
                 arguments[index] = _append(arguments.get(index, ""), delta.get("partial_json"))
+                if delta.get("partial_json"):
+                    yield ProviderEvent("progress", {})
             elif (
                 delta_type in ("thinking_delta", "signature_delta")
                 and block.get("type") == "thinking"
             ):
                 key = "thinking" if delta_type == "thinking_delta" else "signature"
                 block[key] = _append(block.get(key, ""), delta.get(key), MAX_STREAM_BYTES)
+                if key == "thinking":
+                    yield ProviderEvent("reasoning_delta", {"delta": _text(delta[key])})
             else:
                 raise _protocol("无法安全重建 Anthropic 内容增量。")
         elif kind == "content_block_stop":
@@ -737,6 +861,8 @@ async def _anthropic(events, allowed: dict) -> AsyncIterator[ProviderEvent]:
             if not started or not finish or open_blocks:
                 raise _protocol("Anthropic 终止时仍有未完成内容块或缺少结束原因。")
             output = [block for _, block in sorted(blocks.items())]
+            if usage:
+                yield _usage("anthropic", usage)
             complete = _complete_calls(
                 [
                     {
@@ -748,17 +874,52 @@ async def _anthropic(events, allowed: dict) -> AsyncIterator[ProviderEvent]:
                     if block.get("type") == "tool_use"
                 ],
                 allowed,
+                "anthropic",
             )
             if bool(complete) != (finish == "tool_use"):
                 raise _protocol("Anthropic 工具调用没有以 tool_use 正常结束。")
             yield ProviderEvent("provider_output", {"provider_type": "anthropic", "output": output})
-            if usage:
-                yield _usage("anthropic", usage)
             for call in complete:
                 yield call
             yield ProviderEvent("done", {"finish_reason": finish})
             return
     raise _protocol("Anthropic 流在 message_stop 前断开。")
+
+
+async def abort_generation(config: ProviderConfig) -> None:
+    from workbench.modules.models.engine_adapters import is_loopback, resolve_engine
+
+    if (
+        resolve_engine(config) != "sglang"
+        or not config.request_id
+        or not is_loopback(config.endpoint)
+    ):
+        return
+    endpoint = urlsplit(config.endpoint)
+    # SGLang's control endpoint is outside /v1 and only this owned request is
+    # selected. Never use abort_all or affect another conversation's request.
+    url = urlunsplit((endpoint.scheme, endpoint.netloc, "/abort_request", "", ""))
+    try:
+        async with httpx.AsyncClient(timeout=2, trust_env=False, follow_redirects=False) as client:
+            await client.post(url, json={"rid": config.request_id, "abort_all": False})
+    except httpx.HTTPError:
+        # The streaming connection is still closed by its owner. Failure to
+        # acknowledge this optional engine extension is not proof of completion.
+        pass
+
+
+async def _idle_events(events, seconds):
+    """Bound silence between meaningful model events, not productive total time."""
+    try:
+        while True:
+            try:
+                async with asyncio.timeout(seconds):
+                    event = await anext(events)
+            except StopAsyncIteration:
+                return
+            yield event
+    finally:
+        await events.aclose()
 
 
 async def stream_model(
@@ -777,27 +938,26 @@ async def stream_model(
             "openai_responses": _responses,
             "anthropic": _anthropic,
         }
-        async with asyncio.timeout(config.timeout_seconds):
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(config.timeout_seconds),
-                transport=httpx.AsyncHTTPTransport(retries=0),
-                follow_redirects=False,
-            ) as client:
-                async with client.stream("POST", url, headers=headers, content=payload) as response:
-                    await _check_http(response)
-                    events = (
-                        _chat(_sse(response), allowed, config.cache_observation)
-                        if provider == "openai_compatible"
-                        else handlers[provider](_sse(response), allowed)
-                    )
-                    async for event in events:
-                        yield event
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(config.timeout_seconds, connect=min(10, config.timeout_seconds)),
+            transport=httpx.AsyncHTTPTransport(retries=0),
+            follow_redirects=False,
+        ) as client:
+            async with client.stream("POST", url, headers=headers, content=payload) as response:
+                await _check_http(response)
+                events = (
+                    _chat(_sse(response), allowed, config.cache_observation)
+                    if provider == "openai_compatible"
+                    else handlers[provider](_sse(response), allowed)
+                )
+                async for event in _idle_events(events, config.timeout_seconds):
+                    yield event
     except AppError:
         raise
     except (TimeoutError, httpx.TimeoutException):
         raise _error(
             "provider_timeout",
-            "模型服务请求超时；部分输出保持未完成，本次未自动重试。",
+            "模型服务长时间没有生成进展；部分输出保持未完成。",
             retryable=True,
         ) from None
     except httpx.InvalidURL:

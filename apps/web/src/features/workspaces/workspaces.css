@@ -37,3 +37,70 @@
   margin-top: 15px;
   line-height: 1.8;
 }
+.workspace-directory-field {
+  display: grid;
+  justify-items: start;
+  gap: 9px;
+  font-size: 12px;
+}
+.workspace-directory-field output,
+.directory-picker-location span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.directory-picker {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-width: 0;
+}
+.directory-picker-places {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.directory-picker-location {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+.directory-picker-location > button {
+  flex-shrink: 0;
+}
+.directory-picker-hidden {
+  display: flex !important;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+.directory-picker-hidden input {
+  width: auto;
+}
+.directory-picker-list {
+  display: grid;
+  max-height: 32dvh;
+  overflow-y: auto;
+  min-width: 0;
+}
+.directory-picker-list > button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 7px;
+  text-align: left;
+  border-radius: 5px;
+  font-size: 13px;
+  min-width: 0;
+}
+.directory-picker-list > button:hover {
+  background: var(--bg);
+}
+.directory-picker-list svg {
+  flex-shrink: 0;
+}
+.directory-picker-list span {
+  overflow-wrap: anywhere;
+}

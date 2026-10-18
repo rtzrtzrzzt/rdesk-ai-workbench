@@ -5,14 +5,10 @@ import { filesApi } from '../../api/files'
 import type { ArtifactView } from '../../api/types'
 import { Button } from '../../components/ui'
 import { Dialog } from '../../components/Dialog'
+import { uploadFile, UploadPaused } from './upload'
+import type { PendingUpload } from './upload'
 
-export type PendingUpload = {
-  requestId: string
-  filename: string
-  totalBytes: number
-  mimeType: string | null
-  id?: string
-}
+export type { PendingUpload } from './upload'
 const storageKey = (workspaceId: string) => `workbench.upload.${workspaceId}`
 function readPending(workspaceId: string): PendingUpload | null {
   try {
@@ -90,56 +86,25 @@ export function FileUpload({
     }
     persist(pending)
     try {
-      let current = pending.id
-        ? await filesApi.uploadStatus(workspaceId, pending.id)
-        : await filesApi.upload(workspaceId, {
-            filename: pending.filename,
-            total_bytes: pending.totalBytes,
-            mime_type: pending.mimeType,
-            request_id: pending.requestId,
-          })
-      pending = { ...pending, id: current.id }
-      persist(pending)
-      client.setQueryData(['upload-status', workspaceId, current.id], current)
-      if (current.artifact_id && current.status === 'completed') {
-        const artifact = await filesApi.artifact(workspaceId, current.artifact_id)
-        await onComplete(artifact)
-        persist(null)
-        setFile(null)
-        setMessage('原件已保存，是否可解析需另行检查。')
-        return
-      }
-      if (
-        current.total_bytes !== file.size ||
-        current.received_bytes > file.size ||
-        current.chunk_size < 1
-      )
-        throw new Error('服务端上传状态与原文件不一致，请核对后再继续。')
-      while (current.received_bytes < file.size) {
-        if (pause.current) break
-        const offset = current.received_bytes
-        const size = Math.min(current.chunk_size, 4 * 1024 * 1024)
-        const next = await filesApi.chunk(
-          workspaceId,
-          current.id,
-          offset,
-          file.slice(offset, Math.min(offset + size, file.size)),
-        )
-        if (next.received_bytes <= offset)
-          throw new Error('服务端尚未确认新的分块，请核对上传状态后继续。')
-        current = next
-        client.setQueryData(['upload-status', workspaceId, current.id], current)
-      }
-      if (pause.current) {
-        setMessage('传输已暂停，原件尚未保存。可从已确认位置继续。')
-        return
-      }
-      const artifact = await filesApi.complete(workspaceId, current.id)
+      const artifact = await uploadFile(workspaceId, file, {
+        record: pending,
+        onRecord: (next) => {
+          pending = next
+          persist(next)
+        },
+        onProgress: (current) =>
+          client.setQueryData(['upload-status', workspaceId, current.id], current),
+        shouldPause: () => pause.current,
+      })
       await onComplete(artifact)
       persist(null)
       setFile(null)
       setMessage('原件已保存，上传完成不等于已解析。')
     } catch (err) {
+      if (err instanceof UploadPaused) {
+        setMessage('传输已暂停，可从已确认的位置继续。')
+        return
+      }
       setError(
         `${err instanceof Error ? err.message : '上传未完成。'} 上传记录已保留，再次继续前会读取服务端确认的位置。`,
       )

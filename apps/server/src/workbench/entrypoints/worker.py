@@ -2,8 +2,10 @@ import asyncio
 import logging
 import os
 
+import psycopg
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from workbench.composition import tables  # noqa: F401
 from workbench.config import get_settings
@@ -17,26 +19,57 @@ from workbench.modules.runs.executor import serve
 
 def resolved_interaction(payload) -> tuple[bool, object]:
     with Session(engine()) as db:
+        if payload["kind"] == "continuation":
+            return True, True
+        if payload["kind"] == "safety":
+            from workbench.modules.runs.domain import Run
+
+            guard = db.get(Run, payload["run_id"]).config_snapshot.get("safety", {})
+            return guard.get("accepted_wait") == payload["id"], True
         if payload["kind"] == "agents":
             from workbench.modules.collaboration.service import wait_ready
 
             return wait_ready(db, payload["run_id"]), True
         if payload["kind"] == "question":
             question = db.get(Question, payload["question_id"])
-            return question.status == "answered", question.answer[
-                "value"
-            ] if question.answer else None
+            # The tool reads the durable answer itself. A non-null acknowledgement
+            # also resumes a superseded question; Command(resume=None) does not.
+            return question.status in {"answered", "superseded"}, True
         if payload["kind"] == "questions":
             return all(
-                db.get(Question, question_id).status == "answered"
+                db.get(Question, question_id).status in {"answered", "superseded"}
                 for question_id in payload["question_ids"]
             ), True
         approval = db.get(Approval, payload["approval_id"])
-        return approval.status in {"approved", "rejected"}, approval.approved
+        return approval.status in {"approved", "rejected", "superseded"}, approval.approved
 
 
 async def advance(graph, run_id: str) -> dict:
-    config = {"configurable": {"thread_id": run_id}, "recursion_limit": 160}
+    from workbench.modules.runs.domain import Run
+
+    def compaction_job():
+        with Session(engine()) as db:
+            return db.get(Run, run_id).kind == "context_compaction"
+
+    if await asyncio.to_thread(compaction_job):
+        from workbench.modules.context.service import process_idle
+
+        return await process_idle(run_id)
+
+    def stage_size():
+        with Session(engine()) as db:
+            return (
+                db.get(Run, run_id)
+                .config_snapshot.get("runtime_options", {})
+                .get("checkpoint_rounds", 32)
+            )
+
+    # One model response can contain up to 128 serial tool nodes. Recursion is
+    # an implementation bound for a checkpoint segment, not a user turn limit.
+    config = {
+        "configurable": {"thread_id": run_id},
+        "recursion_limit": (await asyncio.to_thread(stage_size)) * 260 + 16,
+    }
     await asyncio.to_thread(scheduler.recover_operations, run_id)
     snapshot = await graph.aget_state(config)
     if snapshot.values:
@@ -81,8 +114,34 @@ async def main_async():
         cleanup_stop = asyncio.Event()
         cleanup_task = asyncio.create_task(serve_cleanup(cleanup_stop))
         commands_task = asyncio.create_task(command_cleanup(cleanup_stop))
+
+        async def maintain():
+            from workbench.modules import conversation_deletion, conversation_queue
+
+            def queues():
+                with Session(engine()) as db, db.begin():
+                    conversation_queue.maintain(db)
+                    from workbench.modules.context.service import maintain
+
+                    maintain(db)
+
+            try:
+                await asyncio.to_thread(queues)
+                await conversation_deletion.maintain()
+            except (SQLAlchemyError, psycopg.Error):
+                logging.getLogger("workbench.worker").warning(
+                    "Conversation maintenance deferred: database unavailable or busy."
+                )
+
         try:
-            await serve("agent", 82139702, handle)
+            await serve(
+                "agent",
+                82139702,
+                handle,
+                maintenance=maintain,
+                maintenance_interval=1,
+                maintenance_when_active=True,
+            )
         finally:
             cleanup_stop.set()
             await commands_task

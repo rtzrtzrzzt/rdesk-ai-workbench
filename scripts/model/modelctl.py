@@ -25,6 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from engines import engine_for
 from local_http import open_local
 from supervision import LinuxSubreaper, boot_id, process_start, signal_identity
 
@@ -437,43 +438,7 @@ def group_resources(pgid):
 
 
 def command():
-    c = CONFIG
-    return [
-        str(ROOT / c["python"]),
-        "-m",
-        "sglang.launch_server",
-        "--model-path",
-        str(ROOT / c["model_path"]),
-        "--served-model-name",
-        c["served_model_name"],
-        "--host",
-        c["host"],
-        "--port",
-        str(c["port"]),
-        "--context-length",
-        str(c["context_length"]),
-        "--max-running-requests",
-        str(c["max_running_requests"]),
-        "--max-total-tokens",
-        str(c["max_total_tokens"]),
-        "--model-impl",
-        "sglang",
-        "--chunked-prefill-size",
-        str(c["chunked_prefill_size"]),
-        "--mem-fraction-static",
-        str(c["mem_fraction_static"]),
-        "--ple-offload-embedding",
-        "--ple-offload-backend",
-        "file",
-        "--ple-offload-dir",
-        str(ROOT / c["ple_directory"]),
-        "--moe-runner-backend",
-        c["moe_runner_backend"],
-        "--reasoning-parser",
-        "qwen3",
-        "--tool-call-parser",
-        "qwen3_coder",
-    ]
+    return engine_for(ROOT, CONFIG).launch_command()
 
 
 def active_ple_directory():
@@ -642,14 +607,18 @@ def probe():
 
 
 def health():
+    probe = engine_for(ROOT, CONFIG).readiness()
     try:
-        with open_local(f"http://{CONFIG['host']}:{CONFIG['port']}/ready", timeout=2) as r:
-            return r.status == 200
-    except (urllib.error.URLError, TimeoutError, ConnectionError):
+        return probe.check(open_local)
+    except (urllib.error.URLError, TimeoutError, ConnectionError, ValueError):
         return False
 
 
 def serve(precompile=False, fresh_ple=False):
+    # Reject unsupported/external launch modes before reserving state, running
+    # CUDA checks or creating a fresh PLE generation.
+    launch_config = json.loads((ROOT / "runtime/model/deployment.json").read_text())
+    engine_for(ROOT, launch_config).launch_command()
     state_path = PRECOMPILE_STATE if precompile else STATE
     control = {"interrupted": False}
 

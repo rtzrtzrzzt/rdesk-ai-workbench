@@ -16,10 +16,30 @@ def connection(workspace_id: UUID, db: DB, user: USER, scope: dto.Scope | None =
 
 
 @router.post("/connection", response_model=dto.SearchConnectionView)
-def configure(workspace_id: UUID, command: dto.SearchConnectionSave, db: DB, user: USER):
-    result = service.save_connection(db, user.id, str(workspace_id), command)
-    db.commit()
+async def configure(workspace_id: UUID, command: dto.SearchConnectionSave, db: DB, user: USER):
+    user_id = user.id
+    db.rollback()
+    result = await service.save_connection(db, user_id, str(workspace_id), command)
+    await asyncio.to_thread(db.commit)
     return result
+
+
+@router.get("/engines", response_model=dto.SearchEngineCatalog)
+async def engines(workspace_id: UUID, db: DB, user: USER, scope: dto.Scope | None = None):
+    user_id = user.id
+    db.rollback()
+    return await service.get_engine_catalog(
+        db, user_id, str(workspace_id), dto.SearchEngineCatalogQuery(scope=scope)
+    )
+
+
+@router.post("/engines", response_model=dto.SearchEngineCatalog)
+async def draft_engines(
+    workspace_id: UUID, command: dto.SearchEngineCatalogQuery, db: DB, user: USER
+):
+    user_id = user.id
+    db.rollback()
+    return await service.get_engine_catalog(db, user_id, str(workspace_id), command)
 
 
 @router.get("/capability", response_model=dto.SearchCapability)

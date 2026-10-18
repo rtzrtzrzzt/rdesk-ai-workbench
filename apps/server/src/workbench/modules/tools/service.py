@@ -50,7 +50,13 @@ def ensure_operation(run_id: str, call: dict) -> tuple[str, dict | None, dict]:
             )
         )
         if operation:
-            if operation.tool_name != name or operation.arguments != values:
+            recorded_arguments = dict(operation.arguments)
+            if name == "spawn_agent":
+                for key in ("max_output_tokens", "max_model_rounds"):
+                    recorded_arguments.pop(key, None)
+                if "allowed_tools" not in call["arguments"]:
+                    values["allowed_tools"] = recorded_arguments.get("allowed_tools")
+            if operation.tool_name != name or recorded_arguments != values:
                 raise AppError("tool_call_conflict", "调用标识对应的工具或参数已改变。", 409)
             if operation.status in {"succeeded", "failed"} and operation.result is not None:
                 return operation.id, operation.result, values
@@ -92,6 +98,7 @@ def prepare_question(run_id: str, operation_id: str, values: dict) -> dict:
             raise AppError("invalid_question_options", "选择题需要至少两个不同的有效选项。")
     with Session(engine()) as db, db.begin():
         run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        check_steering(db, run_id, operation_id)
         question = db.scalar(select(Question).where(Question.interaction_key == operation_id))
         if question is None:
             question = Question(run_id=run_id, interaction_key=operation_id, **values)
@@ -106,6 +113,7 @@ def prepare_question(run_id: str, operation_id: str, values: dict) -> dict:
 def prepare_approval(run_id: str, operation_id: str, name: str, values: dict) -> dict:
     with Session(engine()) as db, db.begin():
         run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        check_steering(db, run_id, operation_id)
         approval = db.scalar(select(Approval).where(Approval.operation_id == operation_id))
         if approval is None:
             summary = (
@@ -184,6 +192,7 @@ def record_result(
         operation.status = "failed" if result.get("error") is not None else "succeeded"
         operation.effect_status = effect_status
         operation.result = result
+        observation = (operation.tool_name, operation.arguments)
         emit(
             db,
             run_id,
@@ -195,6 +204,10 @@ def record_result(
                 "result": result,
             },
         )
+
+    from workbench.modules.runs.safety import observe
+
+    observe(run_id, operation_id, *observation, result)
 
 
 def rule_notice(run_id: str, path: str) -> dict | None:
@@ -229,7 +242,8 @@ def needs_approval(run_id: str, name: str, values: dict) -> bool:
         return True
     if name != "read_artifact":
         return False
-    from workbench.modules.files.inputs import is_remote
+    from workbench.modules.files.inputs import is_remote, local_only_source
+    from workbench.modules.files.service import get_artifact
     from workbench.modules.models.domain import ModelRevision
 
     with Session(engine()) as db:
@@ -237,11 +251,17 @@ def needs_approval(run_id: str, name: str, values: dict) -> bool:
         revision = db.get(ModelRevision, run.config_snapshot["model_revision_id"])
         if not is_remote(revision.configuration["endpoint"]):
             return False
+        if local_only_source(
+            db, get_artifact(db, run.user_id, run.workspace_id, values["artifact_id"])
+        ):
+            raise AppError(
+                "capture_remote_disabled", "截图及其派生内容当前仅供本地模型。", 403, "policy"
+            )
         from workbench.modules.conversations import Message
 
         target = f"{revision.connection_id}:{revision.connection_version}"
         return not any(
-            item["artifact_id"] == values["artifact_id"]
+            values["artifact_id"] in {item["artifact_id"], item.get("source_artifact_id")}
             and item.get("consent_remote")
             and item.get("consent_target") == target
             for refs in db.scalars(select(Message.attachments).where(Message.run_id == run_id))
@@ -254,6 +274,8 @@ def execution_root(run_id: str, operation_id: str, name: str, call_id: str) -> P
         run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
         if run.cancel_requested_at:
             raise asyncio.CancelledError
+        check_steering(db, run_id, operation_id)
+        set_status(db, run, "running")
         workspace = db.get(Workspace, run.workspace_id)
         operation = db.get(Operation, operation_id)
         operation.status = "running"
@@ -272,6 +294,27 @@ def execution_root(run_id: str, operation_id: str, name: str, call_id: str) -> P
             },
         )
         return Path(workspace.root_path)
+
+
+def check_steering(db, run_id, operation_id):
+    from workbench.modules.collaboration.inbox import has_new_user_input
+
+    operation = db.get(Operation, operation_id)
+    if operation and (
+        operation.status == "waiting_input" or operation.effect_status != "not_started"
+    ):
+        # An MCP continuation or an already launched command must reach its
+        # real completion/reconciliation boundary; steering is not rollback.
+        return
+    if has_new_user_input(db, run_id):
+        raise AppError(
+            "tool_skipped_for_steering", "收到新要求，此操作尚未执行，将重新规划。", kind="steering"
+        )
+
+
+def before_tool(run_id, operation_id):
+    with Session(engine()) as db:
+        check_steering(db, run_id, operation_id)
 
 
 def file_change(run_id: str, root: Path, name: str, values: dict) -> dict:
@@ -312,6 +355,7 @@ async def execute_one(run_id: str, call: dict) -> dict:
         operation_id, existing, values = await asyncio.to_thread(ensure_operation, run_id, call)
         if existing is not None:
             return existing
+        await asyncio.to_thread(before_tool, run_id, operation_id)
         name = call["name"]
         if TOOLS[name].module == "filesystem" and "path" in values:
             notice = await asyncio.to_thread(rule_notice, run_id, values["path"])
@@ -323,6 +367,7 @@ async def execute_one(run_id: str, call: dict) -> dict:
         if name == "ask_user":
             question = await asyncio.to_thread(prepare_question, run_id, operation_id, values)
             interrupt({"kind": "question", "question_id": question["id"]})
+            await asyncio.to_thread(before_tool, run_id, operation_id)
             result = await asyncio.to_thread(answer_result, question["id"])
             await asyncio.to_thread(record_result, run_id, operation_id, result)
             return result
@@ -336,42 +381,29 @@ async def execute_one(run_id: str, call: dict) -> dict:
             return result
         if await asyncio.to_thread(needs_approval, run_id, name, values):
             approval = await asyncio.to_thread(prepare_approval, run_id, operation_id, name, values)
-            interrupt({"kind": "approval", "approval_id": approval["id"]})
+            if approval["status"] == "pending":
+                from workbench.modules.tools.review import review
+
+                await review(run_id, approval["id"])
+                approval = await asyncio.to_thread(
+                    prepare_approval, run_id, operation_id, name, values
+                )
+            if approval["status"] == "pending":
+                interrupt({"kind": "approval", "approval_id": approval["id"]})
+            await asyncio.to_thread(before_tool, run_id, operation_id)
             approved = await asyncio.to_thread(approved_result, approval["id"], values)
             if not approved:
-                result = {"error": {"code": "permission_denied", "message": "用户拒绝了此操作。"}}
+                result = {"error": {"code": "permission_denied", "message": "本次操作未获批准。"}}
                 await asyncio.to_thread(
                     record_result, run_id, operation_id, result, effect_status="not_started"
                 )
                 return result
         root = await asyncio.to_thread(execution_root, run_id, operation_id, name, call["id"])
-        if TOOLS[name].module in {
-            "memory",
-            "search",
-            "discovery",
-            "artifacts",
-            "collaboration",
-            "context",
-            "mcp",
-            "generated",
-            "automation",
-            "processes",
-        }:
-            from workbench.modules.tools.extensions import execute
+        from workbench.modules.tools.watchdog import bounded
 
-            result = await execute(run_id, operation_id, name, values)
-        elif name in {"write_file", "apply_patch"}:
-            result = await asyncio.to_thread(file_change, run_id, root, name, values)
-        elif name == "list_files":
-            result = await asyncio.to_thread(filesystem.list_files, root, values["path"])
-        elif name == "read_file":
-            result = await asyncio.to_thread(filesystem.read_file, root, values)
-        elif name == "exec_command":
-            from workbench.modules.processes.service import execute_bounded
-
-            result = await execute_bounded(run_id, operation_id, values)
-        else:
-            result = await filesystem.execute(root, name, values)
+        result = await bounded(
+            run_id, operation_id, name, values, invoke(run_id, operation_id, root, name, values)
+        )
         if name == "exec_command" and result.get("timed_out"):
             await asyncio.to_thread(record_unknown, run_id, operation_id, name, result)
             raise AppError(
@@ -381,6 +413,9 @@ async def execute_one(run_id: str, call: dict) -> dict:
             result["error"] = {"code": "command_failed", "message": "命令已结束，退出码非零。"}
         result = jsonable_encoder(result)
         await asyncio.to_thread(record_result, run_id, operation_id, result)
+        from workbench.modules.runs.safety import observe
+
+        await asyncio.to_thread(observe, run_id, operation_id, name, values, result)
         return result
     except AppError as error:
         if error.kind in {"outcome_unknown", "ownership"}:
@@ -392,6 +427,9 @@ async def execute_one(run_id: str, call: dict) -> dict:
             await asyncio.to_thread(
                 record_result, run_id, operation_id, result, effect_status="not_started"
             )
+            from workbench.modules.runs.safety import observe
+
+            await asyncio.to_thread(observe, run_id, operation_id, call["name"], values, result)
         return result
     except OSError:
         if "operation_id" in locals() and TOOLS[call["name"]].requires_approval:
@@ -412,3 +450,32 @@ async def execute_one(run_id: str, call: dict) -> dict:
                 record_result, run_id, operation_id, result, effect_status="not_started"
             )
         return result
+
+
+async def invoke(run_id, operation_id, root, name, values):
+    if TOOLS[name].module in {
+        "memory",
+        "search",
+        "discovery",
+        "artifacts",
+        "collaboration",
+        "context",
+        "mcp",
+        "generated",
+        "automation",
+        "processes",
+    }:
+        from workbench.modules.tools.extensions import execute
+
+        return await execute(run_id, operation_id, name, values)
+    if name in {"write_file", "apply_patch"}:
+        return await asyncio.to_thread(file_change, run_id, root, name, values)
+    if name == "list_files":
+        return await asyncio.to_thread(filesystem.list_files, root, values["path"])
+    if name == "read_file":
+        return await asyncio.to_thread(filesystem.read_file, root, values)
+    if name == "exec_command":
+        from workbench.modules.processes.service import execute_bounded
+
+        return await execute_bounded(run_id, operation_id, values)
+    return await filesystem.execute(root, name, values)

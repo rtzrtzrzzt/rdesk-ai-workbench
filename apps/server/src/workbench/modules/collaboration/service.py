@@ -104,13 +104,21 @@ def spawn(run_id: str, operation_id: str, values: dict) -> dict:
                 409,
                 "resource",
             )
-        allowed = set(values["allowed_tools"])
         parent_allowed = set(root.config_snapshot.get("allowed_tools", list(TOOLS)))
-        if (
-            not allowed
-            or not allowed <= parent_allowed
-            or any(name not in TOOLS for name in allowed)
-        ):
+        requested = values.get("allowed_tools")
+        allowed = (
+            set(requested)
+            if requested is not None
+            else {
+                name
+                for name in parent_allowed
+                if name in TOOLS
+                and (TOOLS[name].replay_policy == "read" or name == "discover_tools")
+                and not TOOLS[name].requires_approval
+                and (TOOLS[name].module != "collaboration" or name == "inspect_agents")
+            }
+        )
+        if not allowed <= parent_allowed or any(name not in TOOLS for name in allowed):
             raise AppError(
                 "agent_tools_invalid", "子任务工具必须是父权限允许的明确子集。", 422, "policy"
             )
@@ -140,6 +148,24 @@ def spawn(run_id: str, operation_id: str, values: dict) -> dict:
         model = models.get(db, root.user_id, model_id)
         models.validate_endpoint(model.endpoint, model.allow_remote)
         revision = models.freeze(db, root.user_id, model_id)
+        from workbench.modules.models.engine_adapters import reasoning_overrides
+
+        generation_overrides = (
+            reasoning_overrides(
+                revision.configuration,
+                root.config_snapshot.get("generation_overrides", {}).get("reasoning_effort"),
+            )
+            if model_id == root.model_connection_id
+            else {}
+        )
+        output_limits = [
+            value
+            for value in (
+                root.config_snapshot.get("max_output_tokens"),
+                revision.configuration["generation"].get("max_output_tokens"),
+            )
+            if value is not None
+        ]
         child_thread = Thread(
             user_id=root.user_id, workspace_id=root.workspace_id, title=values["name"]
         )
@@ -158,13 +184,10 @@ def spawn(run_id: str, operation_id: str, values: dict) -> dict:
             config_snapshot={
                 "model_version": model.version,
                 "model_revision_id": revision.id,
-                "max_output_tokens": min(
-                    values["max_output_tokens"],
-                    revision.configuration["generation"]["max_output_tokens"],
-                ),
+                "generation_overrides": generation_overrides,
+                "max_output_tokens": min(output_limits) if output_limits else None,
                 "runtime_options": {
                     **root.config_snapshot.get("runtime_options", {}),
-                    "max_model_rounds": values["max_model_rounds"],
                     "child_agent_limit": 0,
                 },
                 "allowed_tools": sorted(allowed),
@@ -220,7 +243,9 @@ def pending(db, root_id):
 def prepare_wait(run_id, seconds=None):
     with Session(engine()) as db, db.begin():
         root, actor = lock_root(db, run_id)
-        if not pending(db, actor.id):
+        from workbench.modules.collaboration.inbox import has_new_user_input
+
+        if not pending(db, actor.id) or has_new_user_input(db, actor.id):
             return False
         if seconds and actor.wait_expires_at is None:
             actor.wait_expires_at = now() + timedelta(seconds=seconds)
@@ -229,8 +254,14 @@ def prepare_wait(run_id, seconds=None):
 
 
 def wait_ready(db, run_id):
+    from workbench.modules.collaboration.inbox import has_new_user_input
+
     run = db.get(Run, run_id)
-    return not pending(db, run_id) or bool(run.wait_expires_at and run.wait_expires_at <= now())
+    return (
+        has_new_user_input(db, run_id)
+        or not pending(db, run_id)
+        or bool(run.wait_expires_at and run.wait_expires_at <= now())
+    )
 
 
 def has_pending(run_id):
@@ -331,6 +362,12 @@ def cancel_agent(run_id, operation_id, agent_id):
 def steer(db, user_id, run_id, values):
     def execute():
         run = get(db, user_id, run_id, lock=True)
+        if run.thread_id:
+            from workbench.modules.conversations import Thread
+
+            thread = db.get(Thread, run.thread_id)
+            if thread and (thread.deleting or thread.archived):
+                raise AppError("thread_unavailable", "会话正在删除或已归档，不能补充任务。", 409)
         job = db.scalar(select(Job).where(Job.run_id == run.id))
         if (
             run.status in TERMINAL_STATUSES | {"held", "cancelling"}
@@ -372,8 +409,34 @@ def steer(db, user_id, run_id, values):
             db,
             run.id,
             "run.input_received",
-            {"message_id": message.id, "effective": "next_model_call"},
+            {"message_id": message.id, "effective": "steering_requested"},
         )
+        inflight = db.scalar(
+            select(Operation.id)
+            .where(
+                Operation.run_id == run.id,
+                Operation.status.in_(["running", "waiting_input", "outcome_unknown"]),
+            )
+            .limit(1)
+        )
+        if not inflight:
+            from workbench.modules.interactions import Approval, Question
+
+            for question in db.scalars(
+                select(Question).where(Question.run_id == run.id, Question.status == "pending")
+            ):
+                question.status = "superseded"
+            for approval in db.scalars(
+                select(Approval).where(Approval.run_id == run.id, Approval.status == "pending")
+            ):
+                approval.status = "superseded"
+            if (
+                run.status in {"waiting_user", "waiting_approval"}
+                and job
+                and job.status == "waiting"
+            ):
+                job.status, job.available_at = "queued", now()
+                set_status(db, run, "queued")
         return {"id": message.id, "status": "queued_for_next_model_call"}
 
     return idempotent(db, user_id, values["request_id"], f"run:{run_id}:input", values, execute)
@@ -381,13 +444,13 @@ def steer(db, user_id, run_id, values):
 
 def budget_check(db, run):
     root = db.get(Run, run.root_run_id or run.id)
-    maximum = root.config_snapshot.get("runtime_options", {}).get("root_model_attempt_limit", 60)
+    maximum = root.config_snapshot.get("runtime_options", {}).get("root_model_attempt_limit", 8192)
     attempts = db.scalar(
         select(func.count())
         .select_from(Attempt)
         .join(Run, Run.id == Attempt.run_id)
         .join(Step, Step.id == Attempt.step_id)
-        .where(Run.root_run_id == root.id, Step.kind == "model")
+        .where(Run.root_run_id == root.id, Step.kind.in_(["model", "approval_review"]))
     )
     if attempts >= maximum:
         raise AppError(

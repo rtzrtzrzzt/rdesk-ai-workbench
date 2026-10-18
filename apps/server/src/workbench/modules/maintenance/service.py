@@ -12,7 +12,6 @@ from uuid import UUID
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
-from pwdlib import PasswordHash
 from sqlalchemy import text
 
 from workbench import __version__
@@ -186,7 +185,6 @@ def _facts(pg, user_id, *, require_quiescent=True):
             )
         }
         if sensitive - {
-            ("users", "password_hash"),
             ("auth_sessions", "token_digest"),
             ("model_connections", "encrypted_api_key"),
             ("model_revisions", "encrypted_api_key"),
@@ -549,12 +547,11 @@ def _sanitize_commands(connection):
         )
 
 
-def _sanitize(pg, database, *, restored_root=None, password=None):
+def _sanitize(pg, database, *, restored_root=None):
     with pg.connect(database) as connection:
         connection.execute("DELETE FROM auth_sessions")
         connection.execute("DELETE FROM login_throttles")
         connection.execute("UPDATE account_command_receipts SET request_digest=NULL")
-        connection.execute("UPDATE users SET password_hash='!credentials-excluded' ")
         connection.execute(
             "UPDATE model_connections SET "
             "encrypted_api_key=NULL,allow_remote=false,service_status='unchecked',checked_at=NULL,capabilities='{}'::jsonb"
@@ -575,6 +572,8 @@ def _sanitize(pg, database, *, restored_root=None, password=None):
         _sanitize_automation(connection)
         _sanitize_commands(connection)
         if restored_root is not None:
+            connection.execute("UPDATE threads SET queue_paused=true")
+            connection.execute("UPDATE queued_inputs SET status='paused' WHERE status='queued'")
             held = connection.execute(
                 "UPDATE runs SET "
                 "status='held',error=jsonb_build_object('code','restore_review_required','message','恢复的任务需要评估，未自动继续。')"
@@ -600,10 +599,6 @@ def _sanitize(pg, database, *, restored_root=None, password=None):
             owners = connection.execute("SELECT id FROM users WHERE owner_slot=1").fetchall()
             if len(owners) != 1:
                 raise AppError("restore_owner_invalid", "备份没有唯一原所有者，拒绝恢复登录。", 422)
-            connection.execute(
-                "UPDATE users SET password_hash=%s WHERE id=%s",
-                (PasswordHash.recommended().hash(password), owners[0][0]),
-            )
         else:
             held = []
     with pg.connect(database) as connection:
@@ -1081,14 +1076,6 @@ def restore_backup(db, user_id, command: dto.RestoreCreate, *, abort_check) -> d
                 raise AppError("idempotency_conflict", "恢复请求标识已用于其他备份。", 409)
             if not previous.database_name.startswith("workbench_restore_"):
                 raise AppError("restore_target_invalid", "恢复结果库名不符合隔离范围。", 409)
-            with pg.connect(previous.database_name) as connection:
-                owner = connection.execute(
-                    "SELECT password_hash FROM users WHERE owner_slot=1"
-                ).fetchone()
-                if not owner or not PasswordHash.recommended().verify(
-                    command.restored_owner_password.get_secret_value(), owner[0]
-                ):
-                    raise AppError("idempotency_conflict", "此恢复请求的登录口令已不同。", 409)
             return previous
         raise AppError("restore_target_exists", "恢复请求目录已存在且未完成，拒绝覆盖。", 409)
     target.mkdir(mode=0o700)
@@ -1130,7 +1117,6 @@ def restore_backup(db, user_id, command: dto.RestoreCreate, *, abort_check) -> d
             pg,
             database,
             restored_root=data,
-            password=command.restored_owner_password.get_secret_value(),
         )
         check()
         _verify_restored(pg, database, data, manifest, check)

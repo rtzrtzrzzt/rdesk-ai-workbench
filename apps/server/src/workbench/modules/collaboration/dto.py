@@ -29,10 +29,17 @@ class AgentTree(PublicResponse):
 
 
 class SteerRun(Command):
-    input: str = Field(min_length=1, max_length=20_000)
+    input: str = Field(min_length=1, max_length=1048576)
     request_id: UUID
 
 
 class InputReceived(PublicResponse):
     id: str
     status: str
+
+
+class InputDelivery(InputReceived):
+    input: str
+    created_at: datetime
+    delivered_attempt_id: str | None
+    processing_attempt_id: str | None = None

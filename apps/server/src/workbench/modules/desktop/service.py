@@ -597,3 +597,40 @@ class DesktopService:
             pending_native_call=pending,
             owned_inputs_released=released,
         )
+
+    async def forget(self, owner: DesktopOwner, sid: str, *, durable_closed=False):
+        from workbench.modules.automation.forget import (
+            SessionForgotten,
+            remove_session_files,
+        )
+
+        sid = str(UUID(str(sid)))
+        async with self.create_lock:
+            session = self.sessions.get(sid)
+            if session is not None:
+                if session.owner != owner:
+                    raise failure("desktop_session_not_found", "桌面会话归属不匹配。", "permission")
+                if (
+                    session.view.status not in {"stopped", "taken_over"}
+                    or session.lock.locked()
+                    or session.native_task
+                    and not session.native_task.done()
+                    or self.control_session == sid
+                ):
+                    raise failure("desktop_forget_not_ready", "桌面会话尚未关闭，不能清除。")
+                # Stop has already released this session's inputs. A different
+                # active control session may now own the shared driver.
+                async with session.lock:
+                    remove_session_files(self.root, owner, sid, "desktop")
+                    session.observed = None
+                    session.native_state = None
+                    session.native_task = None
+                    session.cache.clear()
+                    self.sessions.pop(sid)
+            else:
+                # GovernedDesktop validates the still-present durable row first.
+                if not durable_closed:
+                    raise failure("desktop_session_not_found", "桌面会话归属未确认。", "permission")
+                remove_session_files(self.root, owner, sid, "desktop")
+            self.requests = {key: value for key, value in self.requests.items() if value[1] != sid}
+        return SessionForgotten(session_id=sid)

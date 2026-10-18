@@ -1,7 +1,12 @@
 import { useState } from 'react'
-import type { ModelConnection, ModelInput, ModelUpdate } from '../../api/types'
+import type { Generation, ModelConnection, ModelInput, ModelUpdate } from '../../api/types'
 import { ApiError } from '../../api/client'
 import { Button } from '../../components/ui'
+type GenerationPreferences = Generation & {
+  thinking_mode?: 'default' | 'enabled' | 'disabled'
+  reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh' | null
+  engine_kind?: 'auto' | 'sglang' | 'vllm' | 'llama_cpp' | 'tensorrt_llm' | 'other'
+}
 export function ModelForm({
   initial,
   onSave,
@@ -25,9 +30,9 @@ export function ModelForm({
   const [clearKey, setClearKey] = useState(false)
   const [remote, setRemote] = useState(initial?.allow_remote ?? false)
   const [context, setContext] = useState(initial?.context_window ?? 8192)
-  const [generation, setGeneration] = useState(
+  const [generation, setGeneration] = useState<GenerationPreferences>(
     initial?.generation ?? {
-      max_output_tokens: 2048,
+      max_output_tokens: null,
       timeout_seconds: 180,
       temperature: null,
       cache_observation: 'standard' as const,
@@ -127,20 +132,23 @@ export function ModelForm({
             />
           </label>
           <label>
-            最大输出 token
+            输出上限（留空自动使用剩余上下文）
             <input
               type="number"
-              required
               min={64}
               max={131072}
-              value={generation.max_output_tokens}
+              placeholder="自动"
+              value={generation.max_output_tokens ?? ''}
               onChange={(e) =>
-                setGeneration({ ...generation, max_output_tokens: Number(e.target.value) })
+                setGeneration({
+                  ...generation,
+                  max_output_tokens: e.target.value ? Number(e.target.value) : null,
+                })
               }
             />
           </label>
           <label>
-            请求超时（秒）
+            无生成进展超时（秒）
             <input
               type="number"
               required
@@ -168,6 +176,69 @@ export function ModelForm({
               }
             />
           </label>
+          <label>
+            思考模式
+            <select
+              value={generation.thinking_mode ?? 'default'}
+              onChange={(e) =>
+                setGeneration({
+                  ...generation,
+                  thinking_mode: e.target.value as GenerationPreferences['thinking_mode'],
+                  reasoning_effort:
+                    e.target.value === 'disabled' ? null : generation.reasoning_effort,
+                })
+              }
+            >
+              <option value="default">服务默认（保持模型原有行为）</option>
+              <option value="enabled">开启思考</option>
+              <option value="disabled">关闭思考</option>
+            </select>
+          </label>
+          <label>
+            思考强度
+            <select
+              value={generation.reasoning_effort ?? ''}
+              disabled={generation.thinking_mode === 'disabled'}
+              onChange={(e) =>
+                setGeneration({
+                  ...generation,
+                  reasoning_effort: (e.target.value ||
+                    null) as GenerationPreferences['reasoning_effort'],
+                })
+              }
+            >
+              <option value="">服务默认</option>
+              <option value="low">低（low）</option>
+              <option value="medium">中（medium）</option>
+              {(!/qwen3\.8/i.test(model) || generation.reasoning_effort === 'high') && (
+                <option value="high">高（high）</option>
+              )}
+              <option value="xhigh">极高（xhigh）</option>
+            </select>
+          </label>
+          <label>
+            推理引擎声明
+            <select
+              value={generation.engine_kind ?? 'auto'}
+              onChange={(e) =>
+                setGeneration({
+                  ...generation,
+                  engine_kind: e.target.value as GenerationPreferences['engine_kind'],
+                })
+              }
+            >
+              <option value="auto">自动判断</option>
+              <option value="sglang">SGLang</option>
+              <option value="vllm">vLLM</option>
+              <option value="llama_cpp">llama.cpp</option>
+              <option value="tensorrt_llm">TensorRT-LLM</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+          <p className="page-note">
+            思考选项取决于模型、接口和实际推理引擎；声明引擎不代表能力已经验证。
+            {/qwen3\.8/i.test(model) && 'Qwen3.8 支持 low、medium、xhigh 强度。'}
+          </p>
           <label>
             缓存观测
             <select

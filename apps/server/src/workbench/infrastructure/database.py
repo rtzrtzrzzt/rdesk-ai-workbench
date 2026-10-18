@@ -42,7 +42,10 @@ def engine() -> Engine:
         pool_pre_ping=True,
         pool_size=5,
         max_overflow=5,
-        connect_args={"connect_timeout": 3},
+        connect_args={
+            "connect_timeout": 3,
+            "options": "-c lock_timeout=5000 -c statement_timeout=30000",
+        },
         hide_parameters=True,
     )
 

@@ -49,12 +49,24 @@ class Thread(PublicResponse):
     fork_message_id: str | None = None
     created_at: datetime
     version: int
+    archived: bool = False
+    deleting: bool = False
+    latest_run_id: str | None = None
+    latest_run_status: str | None = None
+    latest_run_phase: str | None = None
+    queue_count: int = 0
+    is_subagent: bool = False
+    agent_parent_thread_id: str | None = None
 
 
 class StoredAttachment(PublicResponse):
     artifact_id: str
     version: str
-    mode: Literal["text", "extracted_text", "native_image", "native_document", "native_audio"]
+    mode: Literal[
+        "file", "text", "extracted_text", "native_image", "native_document", "native_audio"
+    ]
+    source_artifact_id: str | None = None
+    source_version: str | None = None
     consent_remote: bool
     consent_target: str | None = None
     filename: str
@@ -67,6 +79,8 @@ class Message(PublicResponse):
     run_id: str | None
     role: str
     content: str
+    reasoning: str = ""
+    phase: Literal["commentary", "final_answer"] | None = None
     status: str
     created_at: datetime
     attachments: list[StoredAttachment]
@@ -86,6 +100,7 @@ class ModelConnection(PublicResponse):
     capabilities: dict[str, Capability]
     adapter_routes: dict[str, dict]
     generation: Generation
+    reasoning_efforts: list[Literal["low", "medium", "high", "xhigh"]]
     version: int
 
 
@@ -115,6 +130,7 @@ class Approval(PublicResponse):
     tool_name: str
     arguments: dict[str, Any]
     status: str
+    review: dict[str, Any] | None = None
 
 
 class RunError(PublicResponse):
@@ -128,12 +144,15 @@ class Run(PublicResponse):
     thread_id: str | None
     status: str
     model_connection_id: str | None
+    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
     root_run_id: str | None
     parent_run_id: str | None
     state_artifact_id: str | None
     created_at: datetime
     last_event_seq: int
     error: RunError | None
+    paused_reason: RunError | None = None
+    activity: str | None = None
     questions: list[Question]
     approvals: list[Approval]
 

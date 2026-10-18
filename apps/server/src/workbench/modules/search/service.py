@@ -67,13 +67,11 @@ def get_connection(
     return _view(row) if row else None
 
 
-def save_connection(
+def _save_connection(
     db: Session, user_id: str, workspace_id: str, command: dto.SearchConnectionSave
 ) -> dto.SearchConnectionView:
     workspace_service.get(db, user_id, workspace_id)
-    endpoint = normalize_url(command.endpoint.strip(), public=False)
-    if endpoint.query:
-        raise AppError("search_endpoint_invalid", "搜索连接基础 URL 不应含查询参数。", 422)
+    endpoint = _endpoint(command.endpoint)
     key = f"user:{user_id}" if command.scope == "user" else f"workspace:{workspace_id}"
     # Serialize creation as well as updates; a missing row cannot be row-locked.
     lock_key = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big", signed=True)
@@ -109,10 +107,128 @@ def save_connection(
         "timeout_seconds",
     ):
         setattr(row, name, getattr(command, name))
-    row.endpoint = str(endpoint).rstrip("/")
+    row.endpoint = endpoint
     row.status, row.checked_at, row.last_error = "unchecked", None, None
     db.flush()
     return _view(row)
+
+
+def _endpoint(value: str) -> str:
+    url = normalize_url(value.strip(), public=False)
+    if url.query:
+        raise AppError("search_endpoint_invalid", "搜索连接基础 URL 不应含查询参数。", 422)
+    return str(url).rstrip("/")
+
+
+async def engine_catalog(endpoint: str, timeout_seconds: int = 20) -> dto.SearchEngineCatalog:
+    """Read this instance's authorized engine names, not a bundled/global list."""
+    endpoint = _endpoint(endpoint)
+    base = endpoint[:-7] if endpoint.endswith("/search") else endpoint
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            async with client(timeout_seconds) as http:
+                async with http.stream(
+                    "GET", base + "/config", headers={"Accept": "application/json"}
+                ) as response:
+                    status_error(response, search=True)
+                    raw = json.loads(await bounded_body(response))
+    except (TimeoutError, httpx.TimeoutException):
+        raise AppError(
+            "search_catalog_timeout", "读取引擎目录超时；已有选择已保留。", 504, "transient", True
+        ) from None
+    except httpx.HTTPError:
+        raise AppError(
+            "search_catalog_network_error", "无法连接引擎目录；请检查端点。", 502, "transient", True
+        ) from None
+    except ValueError:
+        raise AppError(
+            "search_catalog_protocol_error",
+            "搜索服务未返回有效的引擎目录 JSON。",
+            502,
+            "dependency",
+        ) from None
+    if not isinstance(raw, dict) or not isinstance(raw.get("engines"), list):
+        raise AppError(
+            "search_catalog_protocol_error", "搜索服务响应缺少 engines 目录。", 502, "dependency"
+        )
+    engines, names = [], set()
+    # A malformed/duplicate directory must never authorize an accidental default fallback.
+    for item in raw["engines"]:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("name"), str)
+            or not re.fullmatch(r"[A-Za-z0-9 _.-]{1,80}", item["name"])
+            or item["name"] in names
+            or not isinstance(item.get("enabled"), bool)
+            or not isinstance(item.get("categories"), list)
+            or any(not isinstance(category, str) for category in item["categories"])
+        ):
+            raise AppError(
+                "search_catalog_protocol_error", "搜索服务引擎目录格式不完整。", 502, "dependency"
+            )
+        names.add(item["name"])
+        engines.append(
+            dto.SearchEngine(
+                name=item["name"], categories=item["categories"], default_enabled=item["enabled"]
+            )
+        )
+    if not engines:
+        raise AppError(
+            "search_catalog_empty", "此搜索服务没有公开可选择的引擎。", 502, "dependency"
+        )
+    return dto.SearchEngineCatalog(
+        endpoint=endpoint, fetched_at=now(), engines=sorted(engines, key=lambda item: item.name)
+    )
+
+
+def _validate_engines(engines: list[str], catalog: dto.SearchEngineCatalog) -> None:
+    available = {engine.name for engine in catalog.engines}
+    unknown = [name for name in engines if name not in available]
+    if unknown:
+        raise AppError(
+            "search_engines_unknown",
+            "所选引擎不在此服务的当前目录中，请重新选择：" + "、".join(unknown),
+            422,
+            "dependency",
+        )
+
+
+def _catalog_target(db, user_id, workspace_id, command):
+    try:
+        workspace_service.get(db, user_id, workspace_id)
+        if command.endpoint is not None:
+            return _endpoint(command.endpoint), command.timeout_seconds
+        row = _row(db, user_id, workspace_id, command.scope)
+        if row is None:
+            raise AppError("search_not_configured", "请先填写 SearXNG 端点再读取引擎目录。", 409)
+        return row.endpoint, row.timeout_seconds
+    finally:
+        db.rollback()
+
+
+async def get_engine_catalog(db, user_id, workspace_id, command):
+    endpoint, timeout = await _db_call(_catalog_target, db, user_id, workspace_id, command)
+    return await engine_catalog(endpoint, timeout)
+
+
+async def save_connection(
+    db: Session, user_id: str, workspace_id: str, command: dto.SearchConnectionSave
+) -> dto.SearchConnectionView:
+    # Check authorization before contacting a user-supplied endpoint; release the read transaction.
+    await _db_call(
+        _catalog_target,
+        db,
+        user_id,
+        workspace_id,
+        dto.SearchEngineCatalogQuery(
+            endpoint=command.endpoint, timeout_seconds=command.timeout_seconds
+        ),
+    )
+    if command.engines:
+        _validate_engines(
+            command.engines, await engine_catalog(command.endpoint, command.timeout_seconds)
+        )
+    return await _db_call(_save_connection, db, user_id, workspace_id, command)
 
 
 def _capability(row: SearchConnection | dto.SearchConnectionView | None) -> dto.SearchCapability:
@@ -239,7 +355,7 @@ async def check_connection(db: Session, user_id: str, workspace_id: str) -> dto.
     return await _db_call(_finish, db, user_id, workspace_id, snapshot, error)
 
 
-async def query_connection(
+async def _query_connection(
     connection: dto.SearchConnectionView, command: dto.SearchQuery
 ) -> dto.SearchResult:
     """Adapter entry for a previously authorized immutable connection snapshot."""
@@ -353,6 +469,24 @@ async def query_connection(
         warnings=warnings,
         truncated=truncated,
     )
+
+
+async def query_connection(
+    connection: dto.SearchConnectionView, command: dto.SearchQuery
+) -> dto.SearchResult:
+    """Validate explicit engine selection on every execution, including after instance changes."""
+    if not connection.enabled:
+        raise AppError("search_disabled", "搜索连接已禁用。", 409, "permission")
+    try:
+        async with asyncio.timeout(connection.timeout_seconds):
+            if connection.engines:
+                _validate_engines(
+                    connection.engines,
+                    await engine_catalog(connection.endpoint, connection.timeout_seconds),
+                )
+            return await _query_connection(connection, command)
+    except TimeoutError:
+        raise AppError("search_timeout", "搜索超时；未自动重试。", 504, "transient", True) from None
 
 
 async def search(

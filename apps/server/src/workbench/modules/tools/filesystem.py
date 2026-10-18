@@ -11,7 +11,21 @@ from workbench.contracts.errors import AppError
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_OUTPUT_BYTES = 32 * 1024
-EXCLUDED = frozenset({".git", ".venv", "node_modules", ".local", ".runtime", ".tools"})
+EXCLUDED = frozenset(
+    {
+        ".git",
+        ".venv",
+        "node_modules",
+        ".local",
+        ".runtime",
+        ".tools",
+        ".ssh",
+        ".aws",
+        ".codex",
+        ".gnupg",
+        ".kube",
+    }
+)
 
 
 def authorized_path(root: Path, value: str) -> Path:

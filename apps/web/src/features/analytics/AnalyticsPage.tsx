@@ -152,7 +152,7 @@ function OverviewMetrics({
           </p>
         </MetricCard>
         <MetricCard
-          title="请求平均输出速率"
+          title="端到端输出速率"
           value={noSampleLabel(output.weighted_tokens_per_second, output.sample_count)}
           unit={output.weighted_tokens_per_second === null ? undefined : 'tok/s'}
           hint={
@@ -164,7 +164,7 @@ function OverviewMetrics({
         >
           <p className="analytics-method">
             同一可算子集的输出 tokens 总和 /
-            请求持续时间总和，含请求阶段开销，不代表纯解码速度。覆盖{' '}
+            请求持续时间总和，包含等待、输入处理与生成时间；不是纯解码速度。覆盖{' '}
             {percentLabel(output.coverage_ratio)}。
           </p>
         </MetricCard>

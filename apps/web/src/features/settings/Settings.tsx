@@ -68,7 +68,7 @@ export function SettingsPage({
               <WorkspaceRuntimeDefaults key={workspace.id} workspace={workspace} models={models} />
             )}
           </SettingsGroup>
-          <SettingsGroup title="连接与安全" description="账号、登录会话与模型凭据保护。">
+          <SettingsGroup title="连接与安全" description="本机会话与模型凭据保护。">
             <AccountSecurity key={`account-${userId}`} userId={userId} />
             <Vault key={`vault-${userId}`} userId={userId} />
             <section className="settings-section settings-guidance">

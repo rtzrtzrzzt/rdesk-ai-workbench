@@ -145,8 +145,10 @@ export function ApprovalCard({
   pending,
   onDecide,
   resolvedLabel = '已处理',
+  review,
 }: {
   resolvedLabel?: string
+  review?: Record<string, unknown> | null
   title: string
   target: string
   scope: ReactNode
@@ -172,7 +174,7 @@ export function ApprovalCard({
     <section className="interaction-card approval-card">
       <div className="card-eyebrow">
         <ShieldCheck size={15} />
-        需要授权
+        {review?.decision === 'reviewing' ? '正在审核操作' : pending ? '需要授权' : '操作授权记录'}
       </div>
       <h3>{title}</h3>
       <dl>
@@ -183,6 +185,29 @@ export function ApprovalCard({
         <dt>预期影响</dt>
         <dd>{impact}</dd>
       </dl>
+      {review && (
+        <div className="approval-review" role="status">
+          <strong>
+            {review.decision === 'allow'
+              ? '审核建议：允许'
+              : review.decision === 'deny'
+                ? '审核建议：拒绝'
+                : review.decision === 'reviewing'
+                  ? '正在审核'
+                  : '需要你确认'}
+          </strong>
+          {typeof review.reason === 'string' && <p>{review.reason}</p>}
+          <small>
+            {review.source === 'local_model'
+              ? '本机模型审核'
+              : review.source === 'policy'
+                ? '安全策略'
+                : review.source === 'fallback'
+                  ? '自动审核已回退，等待人工确认'
+                  : '操作审核'}
+          </small>
+        </div>
+      )}
       {error && (
         <p className="form-error" role="alert">
           {error}

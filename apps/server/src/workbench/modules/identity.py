@@ -9,7 +9,6 @@ from workbench.infrastructure.database import Base, Entity
 class User(Entity, Base):
     __tablename__ = "users"
     username: Mapped[str] = mapped_column(String(80), unique=True)
-    password_hash: Mapped[str]
     owner_slot: Mapped[int] = mapped_column(default=1, unique=True)
 
 

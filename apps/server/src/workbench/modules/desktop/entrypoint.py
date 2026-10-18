@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from workbench.config import get_settings
 from workbench.contracts.errors import AppError
+from workbench.modules.automation.forget import SessionForgotten
 from workbench.modules.browser.service import private_path
 from workbench.modules.desktop.dto import (
     DTO,
@@ -134,6 +135,10 @@ def create_app(service: DesktopService, *, on_shutdown=None, authorize=None):
     @app.post("/sessions/{sid}/takeover", response_model=DesktopStop)
     async def takeover(sid: UUID, body: DesktopOwner):
         return await service.stop(body, str(sid), takeover=True)
+
+    @app.post("/sessions/{sid}/forget", response_model=SessionForgotten)
+    async def forget(sid: UUID, owner: DesktopOwner):
+        return await service.forget(owner, str(sid))
 
     return app
 

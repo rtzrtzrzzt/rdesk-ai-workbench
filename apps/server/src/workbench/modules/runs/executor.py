@@ -93,7 +93,15 @@ async def execute_owned(advance, worker_id, run_id, epoch, ownership, backend_pi
         current_owner.reset(token)
 
 
-async def serve(queue: str, lock_id: int, advance, *, maintenance=None):
+async def serve(
+    queue: str,
+    lock_id: int,
+    advance,
+    *,
+    maintenance=None,
+    maintenance_interval=60,
+    maintenance_when_active=False,
+):
     worker_id = os.environ.get("WORKBENCH_WORKER_ID") or str(uuid4())
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -135,9 +143,13 @@ async def serve(queue: str, lock_id: int, advance, *, maintenance=None):
                     if (await cursor.fetchone())[0]:
                         claimed = None
                         try:
-                            if not active and maintenance and time.monotonic() >= next_maintenance:
+                            if (
+                                maintenance
+                                and (not active or maintenance_when_active)
+                                and time.monotonic() >= next_maintenance
+                            ):
                                 await maintenance()
-                                next_maintenance = time.monotonic() + 60
+                                next_maintenance = time.monotonic() + maintenance_interval
                             await asyncio.to_thread(scheduler.touch_worker, worker_id, queue=queue)
                             claimed = await asyncio.to_thread(
                                 scheduler.claim, worker_id, queue=queue

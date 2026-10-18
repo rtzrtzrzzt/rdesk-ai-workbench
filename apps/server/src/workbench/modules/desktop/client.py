@@ -102,3 +102,15 @@ class DesktopClient:
             owner.model_dump(mode="json"),
             DesktopStop,
         )
+
+    async def forget(self, owner, session_id):
+        from workbench.modules.automation.forget import SessionForgotten
+
+        if self.service:
+            return await self.service.forget(owner, session_id)
+        return await self._request(
+            "POST",
+            f"/sessions/{session_id}/forget",
+            owner.model_dump(mode="json"),
+            SessionForgotten,
+        )

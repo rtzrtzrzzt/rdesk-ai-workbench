@@ -8,6 +8,8 @@ import type {
   ModelUpdate,
   CapabilitiesUpdate,
   AttachmentInput,
+  ActivityPage,
+  ActivityDetails,
   RunOptions,
   RunTrace,
   AgentTree,
@@ -24,17 +26,15 @@ import type {
   Workspace,
 } from './types'
 const json = (body: unknown) => ({ method: 'POST', body: JSON.stringify(body) })
-async function authenticate(path: string, username: string, password: string) {
+async function bootstrap() {
   advanceAuthGeneration()
-  const result = await request<Identity>(path, json({ username, password }))
+  const result = await request<Identity>('/auth/bootstrap', json({}))
   setCsrfToken(result.csrf_token)
   return result
 }
 export const api = {
   setupStatus: () => request<SetupStatus>('/setup/status'),
-  initialize: (username: string, password: string) =>
-    authenticate('/setup/owner', username, password),
-  login: (username: string, password: string) => authenticate('/auth/login', username, password),
+  bootstrap,
   session: async (signal?: AbortSignal) => {
     const generation = authGeneration()
     const result = await request<Identity>('/auth/session', { signal })
@@ -56,6 +56,12 @@ export const api = {
     request<Thread>(`/threads/${encodeURIComponent(id)}/fork`, json(input)),
   messages: (id: string, signal?: AbortSignal) =>
     request<Message[]>(`/threads/${id}/messages`, { signal }),
+  activity: (id: string, before: string | null, signal?: AbortSignal) =>
+    request<ActivityPage>(`/threads/${id}/activity${before ? `?before=${before}` : ''}`, {
+      signal,
+    }),
+  activityDetails: (threadId: string, operationId: string, signal?: AbortSignal) =>
+    request<ActivityDetails>(`/threads/${threadId}/activity/${operationId}`, { signal }),
   models: () => request<ModelConnection[]>('/model-connections'),
   createModel: (input: ModelInput) => request<ModelConnection>('/model-connections', json(input)),
   checkModel: (id: string) => request<ModelConnection>(`/model-connections/${id}/checks`, json({})),

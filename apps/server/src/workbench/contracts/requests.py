@@ -1,14 +1,13 @@
-"""HTTP command validation. Passwords retain their exact whitespace."""
+"""HTTP command validation."""
 
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints, model_validator
 
 from workbench.modules.models.profile import Declaration, Generation
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
-Username = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
 
 
 class Command(BaseModel):
@@ -17,16 +16,6 @@ class Command(BaseModel):
 
 class EmptyCommand(Command):
     pass
-
-
-class OwnerCreate(Command):
-    username: Username
-    password: SecretStr = Field(min_length=12, max_length=1024)
-
-
-class Login(Command):
-    username: Username
-    password: SecretStr = Field(min_length=1, max_length=1024)
 
 
 class WorkspaceCreate(Command):
@@ -85,8 +74,18 @@ class CapabilitiesUpdate(Command):
 class AttachmentInput(Command):
     artifact_id: UUID
     version: str = Field(pattern=r"^[a-f0-9]{64}$")
-    mode: Literal["text", "extracted_text", "native_image", "native_document", "native_audio"]
+    mode: Literal[
+        "file", "text", "extracted_text", "native_image", "native_document", "native_audio"
+    ]
+    source_artifact_id: UUID | None = None
+    source_version: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     consent_remote: bool = False
+
+    @model_validator(mode="after")
+    def complete_source(self):
+        if (self.source_artifact_id is None) != (self.source_version is None):
+            raise ValueError("附件原件标识与版本必须同时提供")
+        return self
 
 
 class InputPlan(Command):
@@ -96,9 +95,11 @@ class InputPlan(Command):
 
 class RunOptions(Command):
     sandbox_profile: Literal["native_scoped", "linux_bwrap"] = "native_scoped"
+    approval_mode: Literal["smart", "manual"] = "smart"
     child_agent_limit: int = Field(default=3, ge=0, le=3, strict=True)
-    max_model_rounds: int = Field(default=24, ge=1, le=64, strict=True)
-    root_model_attempt_limit: int = Field(default=60, ge=1, le=200, strict=True)
+    checkpoint_rounds: int = Field(default=32, ge=1, le=128, strict=True)
+    max_model_rounds: int = Field(default=65536, ge=1, le=65536, strict=True)
+    root_model_attempt_limit: int = Field(default=524288, ge=1, le=524288, strict=True)
     model_retry_limit: int = Field(default=2, ge=0, le=2, strict=True)
     retry_backoff_seconds: int = Field(default=1, ge=1, le=30, strict=True)
     context_target_ratio: float = Field(default=0.9, ge=0.5, le=0.95, allow_inf_nan=False)
@@ -106,9 +107,11 @@ class RunOptions(Command):
 
 class RunOptionOverrides(Command):
     sandbox_profile: Literal["native_scoped", "linux_bwrap"] | None = None
+    approval_mode: Literal["smart", "manual"] | None = None
     child_agent_limit: int | None = Field(default=None, ge=0, le=3, strict=True)
-    max_model_rounds: int | None = Field(default=None, ge=1, le=64, strict=True)
-    root_model_attempt_limit: int | None = Field(default=None, ge=1, le=200, strict=True)
+    checkpoint_rounds: int | None = Field(default=None, ge=1, le=128, strict=True)
+    max_model_rounds: int | None = Field(default=None, ge=1, le=65536, strict=True)
+    root_model_attempt_limit: int | None = Field(default=None, ge=1, le=524288, strict=True)
     model_retry_limit: int | None = Field(default=None, ge=0, le=2, strict=True)
     retry_backoff_seconds: int | None = Field(default=None, ge=1, le=30, strict=True)
     context_target_ratio: float | None = Field(default=None, ge=0.5, le=0.95, allow_inf_nan=False)
@@ -120,9 +123,10 @@ class ModelSelectionGuard(Command):
 
 
 class RunCreate(Command):
-    input: Annotated[str, StringConstraints(min_length=1, max_length=131072)]
+    input: Annotated[str, StringConstraints(min_length=1, max_length=1048576)]
     model_connection_id: UUID | None = None
     expected_model: ModelSelectionGuard | None = None
+    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
     request_id: UUID
     deadline_seconds: int | None = Field(default=None, ge=1, le=604800, strict=True)
     attachments: list[AttachmentInput] = Field(default_factory=list, max_length=8)

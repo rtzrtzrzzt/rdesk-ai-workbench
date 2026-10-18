@@ -1,21 +1,30 @@
 import asyncio
 import json
-import re
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from workbench.contracts.errors import AppError
-from workbench.contracts.requests import CancelRun, EmptyCommand
+from workbench.contracts.requests import CancelRun, EmptyCommand, InputPlan
 from workbench.contracts.responses import ERROR_RESPONSES
 from workbench.entrypoints.dependencies import DB, USER
-from workbench.modules.files import dto, exports, service
+from workbench.modules.files import dto, exports, links, preparation, service
 from workbench.modules.files.exports_dto import ExportCreate
 from workbench.modules.files.processors import capabilities
-from workbench.modules.files.storage import storage_path
+from workbench.modules.models import service as model_service
 from workbench.modules.runs import service as run_service
 
 router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}", responses=ERROR_RESPONSES)
+
+
+@router.post("/attachments/prepare", response_model=list[preparation.PreparedAttachment])
+def prepare_attachments(workspace_id: UUID, command: InputPlan, db: DB, user: USER):
+    model = model_service.get(db, user.id, str(command.model_connection_id))
+    result = preparation.prepare(
+        db, user.id, str(workspace_id), model, [str(item) for item in command.artifact_ids]
+    )
+    db.commit()
+    return result
 
 
 @router.get("/artifacts", response_model=list[dto.ArtifactView])
@@ -79,13 +88,16 @@ def artifact(workspace_id: UUID, artifact_id: UUID, db: DB, user: USER):
 
 
 @router.get("/artifacts/{artifact_id}/content", response_class=FileResponse)
-def content(workspace_id: UUID, artifact_id: UUID, db: DB, user: USER, download: bool = True):
-    row = service.get_artifact(db, user.id, str(workspace_id), str(artifact_id))
-    path = storage_path(row.storage_path)
-    if row.status != "available" or not path.is_file():
-        raise AppError("artifact_unavailable", "此文件原件暂不可读取，请核对存储状态。", 409)
-    safe_image = row.kind == "preview" or re.fullmatch(r"frame_[0-9]{4}", row.kind)
-    inline = not download and safe_image and row.mime_type == "image/png"
+def content(
+    workspace_id: UUID,
+    artifact_id: UUID,
+    db: DB,
+    user: USER,
+    download: bool = True,
+    version: str | None = Query(default=None, pattern=r"^[a-f0-9]{64}$"),
+):
+    row, path = links.validated_artifact(db, user.id, str(workspace_id), str(artifact_id), version)
+    inline = not download and links.safe_inline_image(row)
     return FileResponse(
         path,
         media_type="image/png" if inline else "application/octet-stream",
@@ -95,10 +107,39 @@ def content(workspace_id: UUID, artifact_id: UUID, db: DB, user: USER, download:
     )
 
 
+@router.get("/file-links/{artifact_id}", response_model=dto.ArtifactView)
+def file_link(
+    workspace_id: UUID,
+    artifact_id: UUID,
+    request: Request,
+    db: DB,
+    user: USER,
+    version: str = Query(pattern=r"^[a-f0-9]{64}$"),
+):
+    row, _ = links.validated_artifact(db, user.id, str(workspace_id), str(artifact_id), version)
+    result = links.artifact_link_view(db, row)
+    if "text/html" in request.headers.get("accept", "").lower():
+        preview_id = result["metadata"].get("preview_artifact_id")
+        if preview_id:
+            row, _ = links.validated_artifact(db, user.id, str(workspace_id), preview_id)
+        disposition = "false" if links.safe_inline_image(row) else "true"
+        return RedirectResponse(
+            f"/api/v1/workspaces/{workspace_id}/artifacts/{row.id}/content"
+            f"?download={disposition}&version={row.content_hash}",
+            status_code=307,
+        )
+    return result
+
+
 @router.get("/artifacts/{artifact_id}/preview", response_model=dto.FilePreview)
-def preview(workspace_id: UUID, artifact_id: UUID, db: DB, user: USER):
-    row = service.get_artifact(db, user.id, str(workspace_id), str(artifact_id))
-    path = storage_path(row.storage_path)
+def preview(
+    workspace_id: UUID,
+    artifact_id: UUID,
+    db: DB,
+    user: USER,
+    version: str | None = Query(default=None, pattern=r"^[a-f0-9]{64}$"),
+):
+    row, path = links.validated_artifact(db, user.id, str(workspace_id), str(artifact_id), version)
     if row.status != "available" or not path.is_file():
         raise AppError("artifact_unavailable", "文件尚不可预览，请先确认原件已保存。", 409)
     text, truncated = None, False

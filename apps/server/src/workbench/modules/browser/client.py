@@ -162,3 +162,13 @@ class BrowserClient:
         return await self._request(
             "POST", f"/sessions/{session_id}/stop", owner.model_dump(mode="json"), BrowserStop
         )
+
+    async def forget(self, owner, session_id):
+        from workbench.modules.automation.forget import SessionForgotten
+
+        return await self._request(
+            "POST",
+            f"/sessions/{session_id}/forget",
+            owner.model_dump(mode="json"),
+            SessionForgotten,
+        )

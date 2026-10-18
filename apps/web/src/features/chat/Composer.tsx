@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { ArrowUp, Paperclip, Square } from 'lucide-react'
 import { IconButton } from '../../components/ui'
 
@@ -16,24 +16,26 @@ export function Composer({
   modelId,
   onModelChange,
   onAttachments,
+  onFiles,
   attachmentSummary,
   attachmentsDisabled = false,
   modelDisabled = false,
   readOnly = false,
-  sendWhileRunning = false,
   sendLabel = '发送消息',
   placeholder = '描述你想完成的工作…',
   options,
+  reasoningControl,
   controls,
 }: {
   options?: ReactNode
+  reasoningControl?: ReactNode
   controls?: ReactNode
   modelDisabled?: boolean
   readOnly?: boolean
-  sendWhileRunning?: boolean
   sendLabel?: string
   placeholder?: string
   onAttachments?: () => void
+  onFiles?: (files: File[]) => void
   attachmentSummary?: ReactNode
   attachmentsDisabled?: boolean
   value: string
@@ -49,8 +51,28 @@ export function Composer({
   onModelChange?: (id: string) => void
 }) {
   const composing = useRef(false)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const [dragging, setDragging] = useState(false)
   return (
-    <div className="composer-wrap">
+    <div
+      className={`composer-wrap${dragging ? ' composer-dragging' : ''}`}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes('Files')) {
+          event.preventDefault()
+          if (onFiles && !attachmentsDisabled) setDragging(true)
+        }
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
+      }}
+      onDrop={(event) => {
+        setDragging(false)
+        if (event.dataTransfer.files.length) {
+          event.preventDefault()
+          if (!attachmentsDisabled) onFiles?.(Array.from(event.dataTransfer.files))
+        }
+      }}
+    >
       {controls}
       {attachmentSummary}
       <div className="composer">
@@ -59,9 +81,15 @@ export function Composer({
           placeholder={placeholder}
           value={value}
           readOnly={readOnly}
-          maxLength={20000}
+          maxLength={1048576}
           rows={3}
           onChange={(event) => onChange(event.target.value)}
+          onPaste={(event) => {
+            if (event.clipboardData.files.length && onFiles && !attachmentsDisabled) {
+              event.preventDefault()
+              onFiles(Array.from(event.clipboardData.files))
+            }
+          }}
           onCompositionStart={() => {
             composing.current = true
           }}
@@ -76,8 +104,7 @@ export function Composer({
               !composing.current
             ) {
               event.preventDefault()
-              if (!disabledReason && !sending && (!running || sendWhileRunning) && value.trim())
-                onSend()
+              if (!disabledReason && !sending && !readOnly && value.trim()) onSend()
             }
           }}
         />
@@ -85,10 +112,32 @@ export function Composer({
           <div className="composer-tools">
             <IconButton
               icon={Paperclip}
-              label="选择本次附件"
-              onClick={onAttachments}
-              disabled={!onAttachments || attachmentsDisabled}
+              label="上传附件"
+              onClick={() => fileInput.current?.click()}
+              disabled={!onFiles || attachmentsDisabled}
             />
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              className="sr-only"
+              aria-label="上传附件文件"
+              disabled={!onFiles || attachmentsDisabled}
+              onChange={(event) => {
+                onFiles?.(Array.from(event.target.files ?? []))
+                event.target.value = ''
+              }}
+            />
+            {onAttachments && (
+              <button
+                type="button"
+                className="composer-library"
+                onClick={onAttachments}
+                disabled={attachmentsDisabled}
+              >
+                文件库
+              </button>
+            )}
             {options}
             <label className="model-select-label">
               <span className="sr-only">本次任务使用的模型</span>
@@ -106,6 +155,7 @@ export function Composer({
                 ))}
               </select>
             </label>
+            {reasoningControl}
           </div>
           <div className="composer-actions">
             {running && (
@@ -119,18 +169,16 @@ export function Composer({
                 <Square size={14} fill="currentColor" />
               </button>
             )}
-            {(!running || sendWhileRunning) && (
-              <button
-                className="send-button"
-                type="button"
-                disabled={!!disabledReason || sending || !value.trim()}
-                aria-label={sending ? '正在发送' : sendLabel}
-                title={disabledReason ?? sendLabel}
-                onClick={onSend}
-              >
-                <ArrowUp size={19} />
-              </button>
-            )}
+            <button
+              className="send-button"
+              type="button"
+              disabled={!!disabledReason || readOnly || sending || !value.trim()}
+              aria-label={sending ? '正在发送' : sendLabel}
+              title={disabledReason ?? sendLabel}
+              onClick={onSend}
+            >
+              <ArrowUp size={19} />
+            </button>
           </div>
         </div>
       </div>

@@ -15,7 +15,6 @@ import {
   Search,
   PanelLeftClose,
   Plus,
-  RefreshCw,
   Settings,
   SlidersHorizontal,
   Sparkles,
@@ -25,23 +24,50 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { api } from '../api/workbench'
+import { conversationsApi } from '../api/conversations'
+import { QueuePanel } from '../features/chat/QueuePanel'
+import { ThreadMenu } from '../features/chat/ThreadMenu'
 import { settingsApi } from '../api/settings'
-import type { Identity, Message, Run, Thread, AttachmentInput, RunOptions } from '../api/types'
+import type {
+  Identity,
+  Message,
+  Run,
+  Thread,
+  Workspace,
+  AttachmentInput,
+  RunOptions,
+  RunCreate,
+  AgentTree,
+  CommandView,
+  DeletionPreview,
+} from '../api/types'
 import { ApiError, authGeneration } from '../api/client'
 import { Button, EmptyState, IconButton, PageHeading, Status } from '../components/ui'
 import { Dialog } from '../components/Dialog'
 import { filesApi } from '../api/files'
-import { AttachmentPicker, MessageAttachments } from '../features/chat/Attachments'
+import {
+  AttachmentList,
+  AttachmentPicker,
+  AttachmentUploads,
+  MessageAttachments,
+} from '../features/chat/Attachments'
 import type { DraftAttachment } from '../features/chat/Attachments'
+import { useAttachmentUploads } from '../features/chat/useAttachmentUploads'
 import { Composer } from '../features/chat/Composer'
+import { ReasoningEffortSelect } from '../features/chat/ReasoningEffortSelect'
+import type { ReasoningEffort } from '../features/chat/ReasoningEffortSelect'
+import { ContextUsage } from '../features/chat/ContextUsage'
 import { MessageContent, shouldRenderMessage } from '../features/chat/MessageContent'
-import { RunPanel } from '../features/chat/RunPanel'
+import { RunDetails, RunPanel } from '../features/chat/RunPanel'
+import { ConversationTimeline } from '../features/chat/ConversationTimeline'
+import { Thinking } from '../features/chat/Thinking'
 import { useSteering } from '../features/chat/useSteering'
 import { useRunStream } from '../features/chat/useRunStream'
 import {
   runTerminal as terminal,
-  runLabels as labels,
   acceptsInput,
+  runStatusLabel,
+  threadStatusLabel,
 } from '../features/chat/runState'
 import { TaskOptions, validRunOptions } from '../features/chat/TaskOptions'
 import { ConnectionsPage, DiagnosticsPage, SettingsPage } from '../features/settings/Settings'
@@ -52,10 +78,12 @@ import { ToolsPage } from '../features/tools/ToolsPage'
 import { AnalyticsPage } from '../features/analytics/AnalyticsPage'
 import { AutomationPage } from '../features/automation/AutomationPage'
 import { WorkspaceManager } from '../features/workspaces/WorkspaceManager'
+import { DirectoryPicker } from '../features/workspaces/DirectoryPicker'
 import { ForkDialog } from '../features/chat/ForkDialog'
 import { ConversationExport } from '../features/chat/ConversationExport'
 import { useAccountActivity } from '../features/settings/useAccountActivity'
 import '../features/chat/conversation.css'
+import '../features/chat/activity.css'
 import './navigation.css'
 
 type View =
@@ -92,7 +120,10 @@ export function App() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [threadFilter, setThreadFilter] = useState('')
   const [settingsVisited, setSettingsVisited] = useState(false)
-  const [inputModes, setInputModes] = useState<Record<string, 'steer' | 'draft'>>({})
+  const [inputModes, setInputModes] = useState<Record<string, 'steer' | 'queue'>>({})
+  const [defaultInputMode, setDefaultInputMode] = useState<'queue' | 'steer'>(() =>
+    localStorage.getItem('workbench.input-mode') === 'steer' ? 'steer' : 'queue',
+  )
   const [workspaceId, setWorkspaceId] = useState(
     () => localStorage.getItem('workbench.workspace') ?? '',
   )
@@ -100,17 +131,43 @@ export function App() {
   const [modelId, setModelId] = useState('')
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [attachmentDrafts, setAttachmentDrafts] = useState<Record<string, DraftAttachment[]>>({})
+  const attachmentUploads = useAttachmentUploads((artifact, target) => {
+    setAttachmentDrafts((old) => ({
+      ...old,
+      [target]: [
+        ...(old[target] ?? []),
+        { artifact_id: artifact.id, filename: artifact.filename, consent_remote: false },
+      ],
+    }))
+    void queryClient.invalidateQueries({ queryKey: ['artifacts', artifact.workspace_id] })
+  })
   const [taskOptions, setTaskOptions] = useState<Record<string, RunOptions | null>>({})
+  const [reasoningEfforts, setReasoningEfforts] = useState<
+    Record<string, Record<string, ReasoningEffort | null>>
+  >({})
   const [pickingAttachments, setPickingAttachments] = useState(false)
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [notice, setNotice] = useState('')
   const [unconfirmed, setUnconfirmed] = useState(false)
+  const [disconnected, setDisconnected] = useState(false)
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
   const [managingWorkspaces, setManagingWorkspaces] = useState(false)
   const [forkSource, setForkSource] = useState<{ message: Message; threadId: string } | null>(null)
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null)
+  const [editText, setEditText] = useState('')
+  const [editingBusy, setEditingBusy] = useState(false)
+  const [editError, setEditError] = useState('')
+  const [editUnconfirmed, setEditUnconfirmed] = useState(false)
+  const editRequest = useRef<{
+    key: string
+    id: string
+    threadId: string
+    messageId: string
+    payload: RunCreate
+  } | null>(null)
   const [hasNew, setHasNew] = useState(false)
   const pendingSend = useRef<{
     input: string
@@ -120,19 +177,36 @@ export function App() {
     requestId: string
     attachments: AttachmentInput[]
     options: RunOptions | null
+    reasoningEffort: ReasoningEffort | null
     draftKey: string
   } | null>(null)
+  const knownThreadLists = useRef(new Map<string, Thread[]>())
+  const knownRunThreads = useRef(new Map<string, string>())
+  const conversationUi = useRef<{
+    threadId: string
+    editingMessage: Message | null
+    runId?: string
+  }>({ threadId, editingMessage })
   const cancelIds = useRef<Record<string, string>>({})
   const scrollRef = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
-  const setup = useQuery({ queryKey: ['setup'], queryFn: api.setupStatus })
   const session = useQuery({
     queryKey: ['session'],
-    queryFn: ({ signal }) => api.session(signal),
-    enabled: !!setup.data?.configured,
+    queryFn: async ({ signal }) => {
+      try {
+        return await api.session(signal)
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) return api.bootstrap()
+        throw error
+      }
+    },
+    retry: false,
+    enabled: !disconnected,
   })
   const authenticated =
-    !!session.data && !(session.error instanceof ApiError && session.error.status === 401)
+    !disconnected &&
+    !!session.data &&
+    !(session.error instanceof ApiError && session.error.status === 401)
   useAccountActivity(authenticated ? session.data?.user.id : undefined)
   const workspaces = useQuery({
     queryKey: ['workspaces'],
@@ -144,8 +218,25 @@ export function App() {
   const workspace = activeWorkspaces.find((item) => item.id === workspaceId)
   const threads = useQuery({
     queryKey: ['threads', workspaceId],
-    queryFn: () => api.threads(workspaceId),
+    queryFn: async () => {
+      const listed = await api.threads(workspaceId)
+      // Compare only successful server lists from the same workspace. Local cache
+      // insertions and the first load are not evidence of permanent deletion.
+      const previous = knownThreadLists.current.get(workspaceId)
+      knownThreadLists.current.set(workspaceId, listed)
+      if (previous) {
+        const existing = new Set(listed.map((item) => item.id))
+        const removed = previous.filter((item) => !existing.has(item.id))
+        if (removed.length)
+          await clearDeletedConversations({
+            thread_ids: removed.map((item) => item.id),
+            run_ids: removed.flatMap((item) => (item.latest_run_id ? [item.latest_run_id] : [])),
+          })
+      }
+      return listed
+    },
     enabled: authenticated && !!workspace,
+    refetchInterval: 4000,
   })
   const thread = threads.data?.find((item) => item.id === threadId)
   const messages = useQuery({
@@ -170,10 +261,13 @@ export function App() {
   )
   const currentRun = orderedRuns.find((run) => !terminal.has(run.status))
   const lastRun = currentRun ?? orderedRuns.at(-1)
+  conversationUi.current = { threadId, editingMessage, runId: lastRun?.id }
   const {
     connected: streamConnected,
     streaming,
+    reasoning,
     clear: clearStreaming,
+    disconnect: disconnectStream,
   } = useRunStream(lastRun, threadId, authenticated)
   const active = !!currentRun
   const draftKey = thread?.id ?? `new:${workspaceId}`
@@ -190,55 +284,88 @@ export function App() {
   const effectiveModel = readyModels.find((model) => model.id === (modelId || inheritedModelId))
   const inheritedModel = models.data?.find((model) => model.id === inheritedModelId)
   const draftAttachments = attachmentDrafts[draftKey] ?? []
+  const draftUploads = attachmentUploads.items.filter((item) => item.draftKey === draftKey)
   const steering = useSteering(lastRun?.id, refreshRun)
-  const canSteer = !!currentRun && acceptsInput(currentRun.status)
-  const hasSteering = canSteer || !!steering.value || !!steering.pending
-  const steeringMode = hasSteering && inputModes[draftKey] !== 'draft'
-  const visibleThreads = (threads.data ?? []).filter((item) =>
-    item.title.toLocaleLowerCase().includes(threadFilter.trim().toLocaleLowerCase()),
+  const canSteer =
+    !!currentRun && (acceptsInput(currentRun.status) || currentRun.status === 'paused')
+  const steeringMode = active && (inputModes[draftKey] ?? defaultInputMode) === 'steer'
+  const selectedEffort = reasoningEfforts[draftKey]?.[effectiveModel?.id ?? '']
+  const previousEffort =
+    lastRun?.model_connection_id === effectiveModel?.id ? lastRun?.reasoning_effort : null
+  const requestedEffort = selectedEffort === undefined ? previousEffort : selectedEffort
+  const reasoningEffort =
+    requestedEffort && effectiveModel?.reasoning_efforts.includes(requestedEffort)
+      ? requestedEffort
+      : null
+  const composerModel = steeringMode
+    ? models.data?.find((model) => model.id === lastRun?.model_connection_id)
+    : effectiveModel
+  const visibleThreads = (threads.data ?? []).filter(
+    (item) =>
+      !item.is_subagent &&
+      item.title.toLocaleLowerCase().includes(threadFilter.trim().toLocaleLowerCase()),
   )
   const attachmentIds = draftAttachments.map((item) => item.artifact_id)
-  const inputPlan = useQuery({
+  const preparedAttachments = useQuery({
     queryKey: [
-      'input-plan',
+      'attachment-preparation',
       workspaceId,
       effectiveModel?.id,
       effectiveModel?.version,
       attachmentIds,
     ],
-    queryFn: () => filesApi.inputPlan(workspaceId, effectiveModel?.id ?? '', attachmentIds),
+    queryFn: () => filesApi.prepare(workspaceId, effectiveModel?.id ?? '', attachmentIds),
     enabled: authenticated && !!workspace && !!effectiveModel && attachmentIds.length > 0,
+    refetchInterval: (query) =>
+      query.state.data?.some((item) => item.status === 'preparing') ? 1000 : false,
   })
   const attachmentSnapshot: AttachmentInput[] = draftAttachments.flatMap((item) => {
-    const plan = inputPlan.data?.find((p) => p.artifact_id === item.artifact_id)
+    const plan = preparedAttachments.data?.find((p) => p.artifact_id === item.artifact_id)
+    const attachment = plan?.attachment
     return plan &&
-      item.mode &&
-      plan.routes.some((route) => route.mode === item.mode && route.available) &&
+      attachment &&
+      plan.status === 'ready' &&
       (!plan.remote ||
         (item.consent_remote &&
           item.consent_model === `${effectiveModel?.id}:${effectiveModel?.version}` &&
-          item.consent_version === plan.version))
+          item.consent_version === attachment.version))
       ? [
           {
-            artifact_id: item.artifact_id,
-            version: plan.version,
-            mode: item.mode,
+            ...attachment,
             consent_remote:
               plan.remote &&
               item.consent_remote &&
               item.consent_model === `${effectiveModel?.id}:${effectiveModel?.version}` &&
-              item.consent_version === plan.version,
+              item.consent_version === attachment.version,
           },
         ]
       : []
   })
   const attachmentsReady =
-    !draftAttachments.length ||
-    (!inputPlan.isFetching &&
-      !inputPlan.isError &&
-      attachmentSnapshot.length === draftAttachments.length &&
-      attachmentSnapshot.filter((a) => a.mode === 'native_image').length <= 2)
+    !draftUploads.length &&
+    (!draftAttachments.length ||
+      (!preparedAttachments.isError &&
+        attachmentSnapshot.length === draftAttachments.length &&
+        attachmentSnapshot.filter((a) => a.mode === 'native_image').length <= 2))
 
+  function uploadAttachments(files: File[]) {
+    if (!workspace || steeringMode || sending || unconfirmed) return
+    const supportedSize = files.filter((file) => file.size <= 1024 ** 3)
+    const rejected = attachmentUploads.add(
+      supportedSize,
+      workspace.id,
+      draftKey,
+      draftAttachments.length,
+    )
+    if (supportedSize.length !== files.length)
+      setNotice('单文件最多 1 GB，超过大小限制的文件尚未上传。')
+    else if (rejected) setNotice('每条消息最多添加 8 个附件，超出部分尚未上传。')
+  }
+
+  useEffect(() => {
+    for (const run of runs.data ?? [])
+      if (run.thread_id) knownRunThreads.current.set(run.id, run.thread_id)
+  }, [runs.data])
   useEffect(() => {
     const expired = () => {
       void session.refetch()
@@ -259,6 +386,18 @@ export function App() {
     }
   }, [workspaces.data, workspace, workspaceId])
   useEffect(() => {
+    if (thread?.is_subagent) {
+      setThreadId(thread.agent_parent_thread_id ?? '')
+      clearStreaming()
+    }
+  }, [thread?.id, thread?.is_subagent, thread?.agent_parent_thread_id])
+  useEffect(() => {
+    if (threads.data && threadId && !thread && !threads.isFetching) {
+      setThreadId('')
+      clearStreaming()
+    }
+  }, [threads.data, threadId, thread, threads.isFetching])
+  useEffect(() => {
     localStorage.setItem('workbench.workspace', workspaceId)
     localStorage.setItem('workbench.thread', threadId)
   }, [workspaceId, threadId])
@@ -270,14 +409,15 @@ export function App() {
   useEffect(() => {
     if (follow.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
     else setHasNew(true)
-  }, [messages.data, streaming])
+  }, [messages.data, streaming, reasoning])
   function navigate(next: View) {
     if (next === 'settings') setSettingsVisited(true)
     setView(next)
     setMobileSidebar(false)
   }
   function chooseWorkspace(id: string) {
-    if (!activeWorkspaces.some((item) => item.id === id)) return
+    const current = queryClient.getQueryData<Workspace[]>(['workspaces']) ?? []
+    if (!current.some((item) => item.id === id && !item.archived && !item.removed_at)) return
     setWorkspaceId(id)
     setModelId('')
     setThreadFilter('')
@@ -292,19 +432,81 @@ export function App() {
     setNotice('')
     navigate('chat')
   }
-  async function authenticate(username: string, password: string) {
+  async function authenticate() {
     setAuthBusy(true)
     setAuthError('')
     try {
-      const identity = setup.data?.configured
-        ? await api.login(username, password)
-        : await api.initialize(username, password)
-      queryClient.setQueryData<Identity>(['session'], identity)
-      await queryClient.invalidateQueries({ queryKey: ['setup'] })
+      queryClient.setQueryData<Identity>(['session'], await api.bootstrap())
+      setDisconnected(false)
     } catch (error) {
       setAuthError(errorText(error))
     } finally {
       setAuthBusy(false)
+    }
+  }
+  async function sendSteering() {
+    if (thread?.archived || thread?.deleting || unconfirmed) return
+    const text = steering.pending?.input ?? draft
+    const key = draftKey
+    const accepted = await steering.send(draft)
+    if (accepted) {
+      setDrafts((old) => ({ ...old, [key]: old[key]?.trim() === text.trim() ? '' : old[key] }))
+      setInputModes((old) => {
+        const next = { ...old }
+        delete next[key]
+        return next
+      })
+    }
+  }
+  async function editMessage() {
+    if (!editingMessage || editingBusy) return
+    if (!editUnconfirmed) {
+      if (!thread || !effectiveModel || !editText.trim() || !optionsReady) return
+      const key = `${thread.id}:${editingMessage.id}:${editText.trim()}:${effectiveModel.id}:${effectiveModel.version}:${reasoningEffort}:${JSON.stringify(options)}`
+      if (editRequest.current?.key !== key) {
+        const requestId = crypto.randomUUID()
+        editRequest.current = {
+          key,
+          id: requestId,
+          threadId: thread.id,
+          messageId: editingMessage.id,
+          payload: {
+            input: editText.trim(),
+            request_id: requestId,
+            model_connection_id: modelId || null,
+            reasoning_effort: reasoningEffort,
+            expected_model: { connection_id: effectiveModel.id, version: effectiveModel.version },
+            options,
+          },
+        }
+      }
+    }
+    const command = editRequest.current
+    if (!command) return
+    setEditingBusy(true)
+    setEditError('')
+    try {
+      const result = await conversationsApi.edit(
+        command.threadId,
+        command.messageId,
+        command.payload,
+      )
+      setEditUnconfirmed(false)
+      await threads.refetch()
+      setThreadId(result.thread.id)
+      clearStreaming()
+      setEditingMessage(null)
+      setEditText('')
+      editRequest.current = null
+      setNotice('已创建新分支并重新生成，原对话已保留。')
+    } catch (error) {
+      const uncertain = uncertainRequest(error)
+      setEditUnconfirmed(uncertain)
+      setEditError(
+        `${errorText(error)}${uncertain ? ' 请求结果尚未确认，请核对同一次编辑后再修改内容。' : ''}`,
+      )
+    } finally {
+      setEditingBusy(false)
     }
   }
   async function send() {
@@ -313,7 +515,8 @@ export function App() {
       !workspace ||
       !effectiveModel ||
       !draft.trim() ||
-      active ||
+      !!thread?.archived ||
+      !!thread?.deleting ||
       unconfirmed ||
       !attachmentsReady ||
       !optionsReady
@@ -335,6 +538,10 @@ export function App() {
         setDrafts((old) => ({ ...old, [selectedThread!.id]: draft }))
         setAttachmentDrafts((old) => ({ ...old, [selectedThread!.id]: draftAttachments }))
         setTaskOptions((old) => ({ ...old, [selectedThread!.id]: options }))
+        setReasoningEfforts((old) => ({
+          ...old,
+          [selectedThread!.id]: old[draftKey] ?? {},
+        }))
       }
       const prior = pendingSend.current
       if (
@@ -343,6 +550,7 @@ export function App() {
         prior.modelId !== (modelId || null) ||
         prior.expectedModel.connection_id !== effectiveModel.id ||
         prior.expectedModel.version !== effectiveModel.version ||
+        prior.reasoningEffort !== reasoningEffort ||
         prior.threadId !== selectedThread.id ||
         JSON.stringify(prior.attachments) !== JSON.stringify(attachmentSnapshot) ||
         JSON.stringify(prior.options) !== JSON.stringify(options)
@@ -355,24 +563,32 @@ export function App() {
           requestId: crypto.randomUUID(),
           attachments: attachmentSnapshot,
           options: options === null ? null : { ...options },
+          reasoningEffort,
           draftKey,
         }
       const request = pendingSend.current!
-      await api.startRun(
-        request.threadId,
-        request.input,
-        request.modelId,
-        request.requestId,
-        request.attachments,
-        request.options,
-        request.expectedModel,
-      )
+      await conversationsApi.enqueue(request.threadId, {
+        input: request.input,
+        model_connection_id: request.modelId,
+        request_id: request.requestId,
+        attachments: request.attachments,
+        options: request.options,
+        expected_model: request.expectedModel,
+        reasoning_effort: request.reasoningEffort,
+      })
       if (generation !== authGeneration()) return
       pendingSend.current = null
       setUnconfirmed(false)
+      setInputModes((old) => {
+        const next = { ...old }
+        delete next[draftKey]
+        delete next[selectedThread!.id]
+        return next
+      })
       setAttachmentDrafts((old) => ({ ...old, [draftKey]: [], [selectedThread!.id]: [] }))
       setDrafts((old) => ({ ...old, [draftKey]: '', [selectedThread!.id]: '' }))
       await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['queue', selectedThread.id] }),
         queryClient.invalidateQueries({ queryKey: ['runs', selectedThread.id] }),
         queryClient.invalidateQueries({ queryKey: ['messages', selectedThread.id] }),
         queryClient.invalidateQueries({ queryKey: ['threads', workspace.id] }),
@@ -396,19 +612,25 @@ export function App() {
     const generation = authGeneration()
     setSending(true)
     try {
-      await api.startRun(
-        pending.threadId,
-        pending.input,
-        pending.modelId,
-        pending.requestId,
-        pending.attachments,
-        pending.options,
-        pending.expectedModel,
-      )
+      await conversationsApi.enqueue(pending.threadId, {
+        input: pending.input,
+        model_connection_id: pending.modelId,
+        request_id: pending.requestId,
+        attachments: pending.attachments,
+        options: pending.options,
+        expected_model: pending.expectedModel,
+        reasoning_effort: pending.reasoningEffort,
+      })
       if (generation !== authGeneration()) return
       pendingSend.current = null
       setUnconfirmed(false)
       setNotice('上次请求已确认。')
+      setInputModes((old) => {
+        const next = { ...old }
+        delete next[pending.draftKey]
+        delete next[pending.threadId]
+        return next
+      })
       setAttachmentDrafts((old) => ({ ...old, [pending.draftKey]: [], [pending.threadId]: [] }))
       setDrafts((old) => ({
         ...old,
@@ -416,6 +638,7 @@ export function App() {
           old[pending.threadId]?.trim() === pending.input ? '' : (old[pending.threadId] ?? ''),
       }))
       await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['queue', pending.threadId] }),
         queryClient.invalidateQueries({ queryKey: ['runs', pending.threadId] }),
         queryClient.invalidateQueries({ queryKey: ['messages', pending.threadId] }),
       ])
@@ -440,12 +663,130 @@ export function App() {
     cancelIds.current[run.id] ??= crypto.randomUUID()
     try {
       await api.cancelRun(run.id, cancelIds.current[run.id])
-      await queryClient.invalidateQueries({ queryKey: ['runs', run.thread_id] })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['runs', run.thread_id] }),
+        queryClient.invalidateQueries({ queryKey: ['queue', run.thread_id] }),
+      ])
     } catch (error) {
       if (generation === authGeneration()) setNotice(errorText(error))
     } finally {
       if (generation === authGeneration()) setStopping(false)
     }
+  }
+  async function clearDeletedConversations(scope: Pick<DeletionPreview, 'thread_ids' | 'run_ids'>) {
+    const threadIds = new Set(scope.thread_ids)
+    const runIds = new Set(scope.run_ids)
+    for (const [runId, ownerThread] of knownRunThreads.current)
+      if (threadIds.has(ownerThread)) runIds.add(runId)
+    const draftKeys = new Set(threadIds)
+    if (pendingSend.current && threadIds.has(pendingSend.current.threadId))
+      draftKeys.add(pendingSend.current.draftKey)
+    for (const id of threadIds) {
+      queryClient.getQueryData<Run[]>(['runs', id])?.forEach((run) => runIds.add(run.id))
+      queryClient.getQueryData<Message[]>(['messages', id])?.forEach((message) => {
+        if (message.run_id) runIds.add(message.run_id)
+      })
+    }
+    const trees = queryClient.getQueriesData<AgentTree>({ queryKey: ['run-agents'] })
+    for (const [, tree] of trees) {
+      if (!tree) continue
+      for (const run of [tree.root, ...tree.agents.map((agent) => agent.run)])
+        if (run.thread_id && threadIds.has(run.thread_id)) runIds.add(run.id)
+    }
+    const commandIds = new Set<string>()
+    for (const [, commands] of queryClient.getQueriesData<CommandView[]>({
+      queryKey: ['commands'],
+    }))
+      commands?.forEach((command) => {
+        if (runIds.has(command.run_id)) commandIds.add(command.id)
+      })
+    for (const [, command] of queryClient.getQueriesData<CommandView>({ queryKey: ['command'] }))
+      if (command && runIds.has(command.run_id)) commandIds.add(command.id)
+    const aggregateTrees = new Set(
+      trees
+        .filter(
+          ([, tree]) =>
+            tree &&
+            [tree.root, ...tree.agents.map((agent) => agent.run)].some((run) => runIds.has(run.id)),
+        )
+        .map(([key]) => JSON.stringify(key)),
+    )
+    const threadKeys = new Set([
+      'messages',
+      'runs',
+      'queue',
+      'thread-deletion',
+      'thread-activity',
+      'tool-details',
+    ])
+    const runKeys = new Set(['run-trace', 'run-agents', 'run-surfaces', 'steering-inputs'])
+    const matching = {
+      predicate: (query: { queryKey: readonly unknown[] }) => {
+        const [kind, id, commandId] = query.queryKey
+        return (
+          typeof kind === 'string' &&
+          ((threadKeys.has(kind) && typeof id === 'string' && threadIds.has(id)) ||
+            (runKeys.has(kind) && typeof id === 'string' && runIds.has(id)) ||
+            (kind === 'run-agents' && aggregateTrees.has(JSON.stringify(query.queryKey))) ||
+            ((kind === 'command' || kind === 'command-output') &&
+              typeof commandId === 'string' &&
+              commandIds.has(commandId)))
+        )
+      },
+    }
+    if (
+      threadIds.has(conversationUi.current.threadId) ||
+      (conversationUi.current.runId && runIds.has(conversationUi.current.runId))
+    ) {
+      disconnectStream()
+      setThreadId('')
+      clearStreaming()
+      setPickingAttachments(false)
+    }
+    const discard = <T,>(old: Record<string, T>) =>
+      Object.fromEntries(Object.entries(old).filter(([id]) => !draftKeys.has(id)))
+    setDrafts(discard)
+    setAttachmentDrafts(discard)
+    setTaskOptions(discard)
+    setReasoningEfforts(discard)
+    setInputModes(discard)
+    steering.forget([...runIds])
+    if (pendingSend.current && threadIds.has(pendingSend.current.threadId)) {
+      pendingSend.current = null
+      setUnconfirmed(false)
+    }
+    if (
+      conversationUi.current.editingMessage &&
+      threadIds.has(conversationUi.current.editingMessage.thread_id)
+    ) {
+      setEditingMessage(null)
+      setEditText('')
+      setEditError('')
+      setEditUnconfirmed(false)
+      editRequest.current = null
+    }
+    if (editRequest.current && threadIds.has(editRequest.current.threadId)) {
+      editRequest.current = null
+      setEditText('')
+      setEditError('')
+      setEditUnconfirmed(false)
+    }
+    setForkSource((old) => (old && threadIds.has(old.threadId) ? null : old))
+    for (const id of runIds) {
+      delete cancelIds.current[id]
+      knownRunThreads.current.delete(id)
+    }
+    for (const [workspaceKey, items] of knownThreadLists.current)
+      knownThreadLists.current.set(
+        workspaceKey,
+        items.filter((item) => !threadIds.has(item.id)),
+      )
+    // Cancel first so an already-running query cannot refill a removed body.
+    await queryClient.cancelQueries(matching)
+    queryClient.removeQueries(matching)
+    queryClient.setQueriesData<CommandView[]>({ queryKey: ['commands'] }, (old) =>
+      old?.filter((command) => !commandIds.has(command.id)),
+    )
   }
   async function refreshRun() {
     await queryClient.invalidateQueries({ queryKey: ['runs', threadId] })
@@ -453,11 +794,15 @@ export function App() {
   async function logout() {
     try {
       await api.logout()
+      setDisconnected(true)
       queryClient.clear()
+      knownThreadLists.current.clear()
+      knownRunThreads.current.clear()
       setThreadId('')
       setDrafts({})
       setAttachmentDrafts({})
       setTaskOptions({})
+      setReasoningEfforts({})
       clearStreaming()
       setInputModes({})
       steering.reset()
@@ -473,31 +818,19 @@ export function App() {
       setNotice(errorText(error))
     }
   }
-  if (setup.isPending || (setup.data?.configured && session.isPending))
+  if (session.isPending && !disconnected)
     return (
       <main className="app-loading">
         <Sparkles size={27} />
-        <span>正在连接工作台…</span>
+        <span>正在连接本机工作台…</span>
       </main>
     )
-  if (setup.data && (!setup.data.configured || (!authenticated && session.isError)))
+  if (!authenticated)
     return (
       <AuthView
-        mode={setup.data.configured ? 'login' : 'initialize'}
         busy={authBusy}
-        error={
-          authError ||
-          (!setup.data.database_ready
-            ? '数据库尚未就绪，请先检查服务配置。'
-            : session.error && !(session.error instanceof ApiError && session.error.status === 401)
-              ? errorText(session.error)
-              : undefined)
-        }
-        onSubmit={
-          setup.data.database_ready
-            ? (username, password) => void authenticate(username, password)
-            : undefined
-        }
+        error={authError || (session.error ? errorText(session.error) : undefined)}
+        onSubmit={() => void authenticate()}
       />
     )
   const disabledReason = unconfirmed
@@ -515,20 +848,27 @@ export function App() {
           : !optionsReady
             ? '任务高级设置须符合整数范围及 0.5–0.95 的上下文比例。'
             : !attachmentsReady
-              ? '附件需完成预检、选择可用路线，并逐项同意远程传输（最多两张图像）。'
-              : active
-                ? currentRun?.status === 'held'
-                  ? '恢复任务已暂停，先停止此任务后再发送新消息。'
-                  : '此处保留下一条消息的草稿，当前任务结束后可发送。'
-                : undefined
+              ? draftUploads.length
+                ? draftUploads.some((item) => item.status === 'failed')
+                  ? '附件上传未完成，请重试或移除失败的文件。'
+                  : '附件正在上传，完成后即可发送。'
+                : preparedAttachments.data?.some((item) => item.remote && item.attachment)
+                  ? '请确认允许将附件发送给当前远程模型。'
+                  : '附件正在自动准备；若提示错误，可重试或移除该文件。'
+              : thread?.deleting
+                ? '对话正在删除，暂时无法发送。'
+                : thread?.archived
+                  ? '归档对话恢复后可发送；恢复不会自动运行队列。'
+                  : undefined
   const loadedMessages = messages.data ?? []
   const displayMessages: Message[] = [
     ...loadedMessages,
-    ...Object.entries(streaming)
-      .filter(([id]) => !loadedMessages.some((message) => message.id === id))
-      .map(([id, content]) => ({
+    ...[...new Set([...Object.keys(streaming), ...Object.keys(reasoning)])]
+      .filter((id) => !loadedMessages.some((message) => message.id === id))
+      .map((id) => ({
         id,
-        content,
+        content: streaming[id] ?? '',
+        reasoning: reasoning[id] ?? '',
         thread_id: threadId,
         run_id: lastRun?.id ?? '',
         role: 'assistant',
@@ -541,44 +881,81 @@ export function App() {
   const composer = (
     <Composer
       controls={
-        hasSteering ? (
-          <div className="composer-mode-row">
-            <div className="segmented" role="group" aria-label="输入用途">
-              <button
-                aria-pressed={steeringMode}
-                onClick={() => setInputModes((old) => ({ ...old, [draftKey]: 'steer' }))}
-              >
-                补充当前任务{steering.pending ? ' · 待核对' : ''}
-              </button>
-              <button
-                aria-pressed={!steeringMode}
-                onClick={() => setInputModes((old) => ({ ...old, [draftKey]: 'draft' }))}
-              >
-                下一条消息
-              </button>
-            </div>
-            {steeringMode && !canSteer && steering.value && !steering.pending && (
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setDrafts((old) => ({
-                    ...old,
-                    [draftKey]: [old[draftKey], steering.value].filter(Boolean).join('\n\n'),
-                  }))
-                  steering.change('')
-                  setInputModes((old) => ({ ...old, [draftKey]: 'draft' }))
-                }}
-              >
-                转入下一条消息草稿
-              </Button>
-            )}
-            {steering.notice && (
-              <p className="page-note" role="status">
-                {steering.notice}
-              </p>
-            )}
+        <div className="composer-mode-row">
+          <div className="segmented" role="group" aria-label="输入用途">
+            <button
+              aria-pressed={!steeringMode}
+              onClick={() => setInputModes((old) => ({ ...old, [draftKey]: 'queue' }))}
+            >
+              Queue · 下一条消息
+            </button>
+            <button
+              aria-pressed={steeringMode}
+              disabled={!active}
+              onClick={() => setInputModes((old) => ({ ...old, [draftKey]: 'steer' }))}
+            >
+              Steer · 补充当前任务
+            </button>
           </div>
-        ) : undefined
+          <label className="composer-default-mode">
+            运行时默认
+            <select
+              aria-label="运行时默认输入模式"
+              value={defaultInputMode}
+              onChange={(event) => {
+                const value = event.target.value as 'queue' | 'steer'
+                setDefaultInputMode(value)
+                localStorage.setItem('workbench.input-mode', value)
+                setInputModes((old) => ({ ...old, [draftKey]: value }))
+              }}
+            >
+              <option value="queue">Queue</option>
+              <option value="steer">Steer</option>
+            </select>
+          </label>
+          <ContextUsage
+            key={`${thread?.id ?? 'new'}:${effectiveModel?.id ?? ''}`}
+            threadId={authenticated ? thread?.id : undefined}
+            modelId={effectiveModel?.id}
+            contextWindow={effectiveModel?.context_window}
+            active={active}
+            disabledReason={
+              thread?.archived || thread?.deleting ? '归档或删除中的对话暂不可压缩。' : undefined
+            }
+          />
+          {steeringMode && (
+            <p className="page-note">
+              {currentRun?.status === 'paused'
+                ? '补充要求会先保存；继续任务后的下一次模型调用时生效。'
+                : '生成中会尽快按新要求调整；已开始的工具操作会先执行到安全边界。'}
+            </p>
+          )}
+          {steering.notice && (
+            <p className="page-note" role="status">
+              {steering.notice}
+            </p>
+          )}
+          {steering.pending && (
+            <Button disabled={steering.busy} onClick={() => void sendSteering()}>
+              核对本次补充要求
+            </Button>
+          )}
+          {steering.deliveries.slice(-3).map((item) => (
+            <p className="steering-delivery" role="status" key={item.id}>
+              {item.status === 'delivered'
+                ? '已生效'
+                : item.status === 'applying'
+                  ? '正在按新要求处理'
+                  : '已接收 · 正在安排调整'}
+              ：{item.input}
+            </p>
+          ))}
+          {steering.deliveryError && (
+            <p className="page-note" role="status">
+              补充要求投递状态暂时无法读取，将自动重试。
+            </p>
+          )}
+        </div>
       }
       options={
         <TaskOptions
@@ -589,37 +966,55 @@ export function App() {
           onChange={(value) => setTaskOptions((old) => ({ ...old, [draftKey]: value }))}
         />
       }
-      onAttachments={workspace && effectiveModel ? () => setPickingAttachments(true) : undefined}
+      onAttachments={workspace ? () => setPickingAttachments(true) : undefined}
+      onFiles={workspace ? uploadAttachments : undefined}
       attachmentsDisabled={steeringMode || sending || unconfirmed}
       attachmentSummary={
-        !steeringMode && draftAttachments.length ? (
-          <button className="attachment-summary" onClick={() => setPickingAttachments(true)}>
-            {draftAttachments.length} 份附件 · {attachmentsReady ? '已准备好' : '需要确认'}
-          </button>
+        !steeringMode && (draftAttachments.length || draftUploads.length) ? (
+          <div className="composer-attachments">
+            <AttachmentList
+              modelId={effectiveModel ? `${effectiveModel.id}:${effectiveModel.version}` : ''}
+              items={draftAttachments}
+              preparations={preparedAttachments.data ?? []}
+              error={preparedAttachments.error}
+              locked={sending || unconfirmed}
+              onChange={(items) =>
+                setAttachmentDrafts((old) => ({
+                  ...old,
+                  [draftKey]: typeof items === 'function' ? items(old[draftKey] ?? []) : items,
+                }))
+              }
+              onRetry={() => void preparedAttachments.refetch()}
+            />
+            <AttachmentUploads
+              items={draftUploads}
+              onRetry={attachmentUploads.retry}
+              onRemove={attachmentUploads.remove}
+            />
+          </div>
         ) : undefined
       }
-      value={steeringMode ? steering.value : draft}
-      onChange={
-        steeringMode
-          ? steering.change
-          : (value) => setDrafts((old) => ({ ...old, [draftKey]: value }))
-      }
-      onSend={() => void (steeringMode ? steering.send() : send())}
+      value={draft}
+      onChange={(value) => setDrafts((old) => ({ ...old, [draftKey]: value }))}
+      onSend={() => void (steeringMode ? sendSteering() : send())}
       disabledReason={
         steeringMode
-          ? !authenticated
-            ? '登录后可补充要求。'
-            : !canSteer && !steering.pending
-              ? '任务已结束或暂停，补充草稿尚未发送。'
-              : undefined
+          ? unconfirmed
+            ? '上次消息发送尚未确认，请先核对。'
+            : thread?.archived || thread?.deleting
+              ? '归档或删除中的对话无法补充要求。'
+              : !authenticated
+                ? '连接本机会话后可补充要求。'
+                : !canSteer && !steering.pending
+                  ? '当前任务暂不接受补充，输入内容已保留。'
+                  : undefined
           : disabledReason
       }
-      readOnly={steeringMode ? steering.busy || !!steering.pending : sending || unconfirmed}
+      readOnly={sending || unconfirmed || steering.busy}
       sending={steeringMode ? steering.busy : sending}
       running={active}
-      sendWhileRunning={steeringMode}
       sendLabel={
-        steeringMode ? (steering.pending ? '核对本次补充要求' : '发送补充要求') : '发送消息'
+        steeringMode ? (steering.pending ? '核对本次补充要求' : '发送补充要求') : '加入消息队列'
       }
       placeholder={steeringMode ? '补充要求，或调整当前任务的方向…' : '描述你想完成的工作…'}
       stopping={stopping || currentRun?.status === 'cancelling'}
@@ -647,6 +1042,21 @@ export function App() {
       modelId={steeringMode ? (lastRun?.model_connection_id ?? '') : modelId}
       modelDisabled={steeringMode || sending || unconfirmed}
       onModelChange={setModelId}
+      reasoningControl={
+        <ReasoningEffortSelect
+          supported={composerModel?.reasoning_efforts ?? []}
+          value={steeringMode ? (lastRun?.reasoning_effort ?? null) : reasoningEffort}
+          disabled={steeringMode || sending || unconfirmed}
+          steering={steeringMode}
+          onChange={(value) => {
+            if (!effectiveModel) return
+            setReasoningEfforts((old) => ({
+              ...old,
+              [draftKey]: { ...old[draftKey], [effectiveModel.id]: value },
+            }))
+          }}
+        />
+      }
     />
   )
   const statusItems = system.data
@@ -814,18 +1224,53 @@ export function App() {
           ) : threads.data?.length ? (
             <div className="thread-list">
               {visibleThreads.length === 0 && <p>没有符合的对话。</p>}
-              {visibleThreads.map((item) => (
-                <button
-                  key={item.id}
-                  data-thread-id={item.id}
-                  aria-current={threadId === item.id && view === 'chat' ? 'page' : undefined}
-                  className={threadId === item.id && view === 'chat' ? 'selected' : ''}
-                  onClick={() => chooseThread(item)}
-                  title={item.title}
-                >
-                  {item.title || '新对话'}
-                </button>
-              ))}
+              {visibleThreads
+                .filter((item) => !item.archived)
+                .map((item) => (
+                  <div className="thread-list-row" key={item.id}>
+                    <button
+                      data-thread-id={item.id}
+                      aria-current={threadId === item.id && view === 'chat' ? 'page' : undefined}
+                      className={threadId === item.id && view === 'chat' ? 'selected' : ''}
+                      onClick={() => chooseThread(item)}
+                      title={item.title}
+                    >
+                      <span>{item.title || '新对话'}</span>
+                      <small>
+                        {threadStatusLabel(item)}
+                        {item.queue_count ? ` · ${item.queue_count} 条排队` : ''}
+                      </small>
+                    </button>
+                    <ThreadMenu
+                      thread={item}
+                      onDeleted={clearDeletedConversations}
+                      onChanged={async () => {
+                        await threads.refetch()
+                        await queryClient.invalidateQueries({ queryKey: ['runs'] })
+                      }}
+                    />
+                  </div>
+                ))}
+              <details className="archived-threads">
+                <summary>已归档（{visibleThreads.filter((item) => item.archived).length}）</summary>
+                {visibleThreads
+                  .filter((item) => item.archived)
+                  .map((item) => (
+                    <div className="thread-list-row" key={item.id}>
+                      <button data-thread-id={item.id} onClick={() => chooseThread(item)}>
+                        <span>{item.title}</span>
+                        <small>{item.deleting ? '删除处理中' : '已归档'}</small>
+                      </button>
+                      <ThreadMenu
+                        thread={item}
+                        onDeleted={clearDeletedConversations}
+                        onChanged={async () => {
+                          await threads.refetch()
+                        }}
+                      />
+                    </div>
+                  ))}
+              </details>
             </div>
           ) : (
             <p>
@@ -851,7 +1296,7 @@ export function App() {
             </button>
           ))}
           {authenticated && (
-            <button className="account-button" title="退出登录" onClick={() => void logout()}>
+            <button className="account-button" title="断开本机会话" onClick={() => void logout()}>
               <div className="account-avatar">
                 {session.data!.user.username.slice(0, 1).toUpperCase()}
               </div>
@@ -877,7 +1322,19 @@ export function App() {
                     { id: 'diagnostics', label: '诊断' },
                   ].find((item) => item.id === view)?.label}
             </span>
-            {view === 'chat' && thread && <ConversationExport thread={thread} />}
+            {view === 'chat' && thread && (
+              <>
+                <ConversationExport thread={thread} />
+                <ThreadMenu
+                  thread={thread}
+                  onDeleted={clearDeletedConversations}
+                  onChanged={async () => {
+                    await threads.refetch()
+                    await queryClient.invalidateQueries({ queryKey: ['runs'] })
+                  }}
+                />
+              </>
+            )}
           </div>
           <button className="connection-indicator" onClick={() => navigate('diagnostics')}>
             {authenticated ? (
@@ -898,15 +1355,9 @@ export function App() {
             </Button>
           </div>
         )}
-        {(notice || setup.isError || workspaces.isError || models.isError) && (
+        {(notice || workspaces.isError || models.isError) && (
           <div className="notice" role="alert">
-            <span>{notice || errorText(setup.error || workspaces.error || models.error)}</span>
-            {setup.isError && (
-              <Button variant="ghost" onClick={() => void setup.refetch()}>
-                <RefreshCw size={14} />
-                重试连接
-              </Button>
-            )}
+            <span>{notice || errorText(workspaces.error || models.error)}</span>
             <IconButton icon={X} label="关闭提示" onClick={() => setNotice('')} />
           </div>
         )}
@@ -941,50 +1392,87 @@ export function App() {
                         {errorText(messages.error)}
                       </p>
                     )}
-                    {displayMessages
-                      .filter((message) => shouldRenderMessage(message, streaming[message.id]))
-                      .map((message) => (
-                        <article
-                          key={message.id}
-                          className={`chat-message message-${message.role}`}
-                        >
-                          <div className="message-author">
-                            {message.role === 'user' ? '你' : '工作台'}
-                          </div>
-                          <div className="message-body">
-                            <MessageAttachments message={message} workspaceId={workspaceId} />
-                            <MessageContent
-                              role={message.role}
-                              content={streaming[message.id] ?? message.content}
-                            />
-                            {message.forkable === true &&
-                              message.status === 'completed' &&
-                              streaming[message.id] === undefined && (
+                    <ConversationTimeline
+                      key={threadId}
+                      threadId={threadId}
+                      messages={displayMessages}
+                      runs={orderedRuns}
+                      renderMessage={(message) =>
+                        shouldRenderMessage(
+                          message,
+                          streaming[message.id],
+                          reasoning[message.id],
+                        ) ? (
+                          <article
+                            key={message.id}
+                            className={`chat-message message-${message.role}`}
+                          >
+                            {message.role === 'user' ? (
+                              <div className="message-author">你</div>
+                            ) : ['superseded', 'interrupted'].includes(message.status) ? (
+                              <div className="message-author">已保留部分输出</div>
+                            ) : null}
+                            <div className="message-body">
+                              <MessageAttachments message={message} workspaceId={workspaceId} />
+                              <Thinking
+                                text={reasoning[message.id] ?? message.reasoning ?? ''}
+                                active={
+                                  message.status === 'streaming' &&
+                                  !(streaming[message.id] ?? message.content).trim() &&
+                                  orderedRuns.some(
+                                    (run) => run.id === message.run_id && run.status === 'running',
+                                  )
+                                }
+                                workspaceId={workspaceId}
+                              />
+                              <MessageContent
+                                workspaceId={workspaceId}
+                                role={message.role}
+                                content={streaming[message.id] ?? message.content}
+                              />
+                              {message.role === 'user' && message.status === 'completed' && (
                                 <div className="message-history-action">
                                   <Button
                                     variant="ghost"
-                                    disabled={sending || unconfirmed}
-                                    onClick={() => setForkSource({ message, threadId })}
+                                    disabled={
+                                      sending ||
+                                      unconfirmed ||
+                                      !!thread?.archived ||
+                                      !!thread?.deleting ||
+                                      !effectiveModel
+                                    }
+                                    onClick={() => {
+                                      setEditingMessage(message)
+                                      setEditText(message.content)
+                                      setEditError('')
+                                      setEditUnconfirmed(false)
+                                    }}
                                   >
-                                    从这里继续
+                                    编辑并创建分支
                                   </Button>
                                 </div>
                               )}
-                          </div>
-                        </article>
-                      ))}
-                    {lastRun && (
-                      <RunPanel
-                        key={lastRun.id}
-                        run={lastRun}
-                        workspaceId={workspaceId}
-                        onOpenThread={async (id) => {
-                          await threads.refetch()
-                          setThreadId(id)
-                          navigate('chat')
-                        }}
-                      />
-                    )}
+                              {message.forkable === true &&
+                                message.status === 'completed' &&
+                                streaming[message.id] === undefined && (
+                                  <div className="message-history-action">
+                                    <Button
+                                      variant="ghost"
+                                      disabled={sending || unconfirmed}
+                                      onClick={() => setForkSource({ message, threadId })}
+                                    >
+                                      从这里继续
+                                    </Button>
+                                  </div>
+                                )}
+                            </div>
+                          </article>
+                        ) : null
+                      }
+                      renderRun={(run) => (
+                        <RunPanel key={run.id} run={run} workspaceId={workspaceId} />
+                      )}
+                    />
                   </div>
                 </div>
                 {hasNew && (
@@ -1003,7 +1491,16 @@ export function App() {
                     <ChevronDown size={14} />
                   </button>
                 )}
-                <div className="conversation-composer">{composer} </div>
+                <div className="conversation-composer">
+                  {thread && (
+                    <QueuePanel
+                      key={thread.id}
+                      threadId={thread.id}
+                      archived={thread.archived || thread.deleting}
+                    />
+                  )}{' '}
+                  {composer}{' '}
+                </div>
               </>
             ) : (
               <div className="new-chat">
@@ -1014,6 +1511,13 @@ export function App() {
                   <h1>今天，想完成什么？</h1>
                   <p>从一个想法、一份资料，或一项具体的工作开始。</p>
                 </div>
+                {thread && (
+                  <QueuePanel
+                    key={thread.id}
+                    threadId={thread.id}
+                    archived={thread.archived || thread.deleting}
+                  />
+                )}
                 {composer}
                 {authenticated && (!workspace || !effectiveModel) && (
                   <div className="onboarding-link">
@@ -1034,23 +1538,26 @@ export function App() {
               {runs.data?.length ? (
                 <div className="task-list">
                   {runs.data.map((run) => (
-                    <div className="task-row" key={run.id}>
-                      <div>
-                        <h3>{labels[run.status] ?? run.status}</h3>
-                        <p>{new Date(run.created_at).toLocaleString()}</p>
-                        {run.error && <p className="form-error">{run.error.message}</p>}
+                    <div className="task-record" key={run.id}>
+                      <div className="task-row">
+                        <div>
+                          <h3>{runStatusLabel(run)}</h3>
+                          <p>{new Date(run.created_at).toLocaleString()}</p>
+                          {run.error && <p className="form-error">{run.error.message}</p>}
+                        </div>
+                        <div className="button-row">
+                          <Button onClick={() => navigate('chat')}>查看对话</Button>
+                          {!terminal.has(run.status) && (
+                            <Button
+                              disabled={stopping || run.status === 'cancelling'}
+                              onClick={() => void cancel(run)}
+                            >
+                              停止任务
+                            </Button>
+                          )}
+                        </div>
                       </div>
-                      <div className="button-row">
-                        <Button onClick={() => navigate('chat')}>查看对话</Button>
-                        {!terminal.has(run.status) && (
-                          <Button
-                            disabled={stopping || run.status === 'cancelling'}
-                            onClick={() => void cancel(run)}
-                          >
-                            停止任务
-                          </Button>
-                        )}
-                      </div>
+                      <RunDetails run={run} workspaceId={workspaceId} />
                     </div>
                   ))}
                 </div>
@@ -1164,24 +1671,35 @@ export function App() {
         </main>
         <div className="global-status">
           <Status tone={active ? 'warning' : 'neutral'}>
-            {active ? labels[currentRun.status] : (workspace?.name ?? '尚未选择工作区')}
+            {active ? runStatusLabel(currentRun) : (workspace?.name ?? '尚未选择工作区')}
           </Status>
           <span>
-            {active ? '离开页面后任务仍会继续' : (effectiveModel?.name ?? '配置模型后即可开始工作')}
+            {active
+              ? currentRun.status === 'paused' || currentRun.status === 'held'
+                ? '任务已暂停，确认后继续'
+                : '离开页面后任务仍会继续'
+              : (effectiveModel?.name ?? '配置模型后即可开始工作')}
           </span>
         </div>
       </div>
-      {pickingAttachments && workspace && effectiveModel && (
+      {pickingAttachments && workspace && (
         <AttachmentPicker
           key={workspace.id}
           workspaceId={workspace.id}
-          modelId={`${effectiveModel.id}:${effectiveModel.version}`}
+          modelId={effectiveModel ? `${effectiveModel.id}:${effectiveModel.version}` : ''}
           items={draftAttachments}
-          plans={inputPlan.data ?? []}
-          error={inputPlan.error}
-          loading={inputPlan.isFetching}
+          preparations={preparedAttachments.data ?? []}
+          error={preparedAttachments.error}
           locked={sending || unconfirmed}
-          onChange={(items) => setAttachmentDrafts((old) => ({ ...old, [draftKey]: items }))}
+          onChange={(items) =>
+            setAttachmentDrafts((old) => ({
+              ...old,
+              [draftKey]: typeof items === 'function' ? items(old[draftKey] ?? []) : items,
+            }))
+          }
+          maxItems={Math.max(0, 8 - draftUploads.length)}
+          onFiles={uploadAttachments}
+          onRetry={() => void preparedAttachments.refetch()}
           onClose={() => setPickingAttachments(false)}
         />
       )}
@@ -1190,9 +1708,13 @@ export function App() {
           onClose={() => setCreatingWorkspace(false)}
           onCreate={async (name, path) => {
             const created = await api.createWorkspace(name, path)
-            await workspaces.refetch()
+            queryClient.setQueryData<Workspace[]>(['workspaces'], (old) => [
+              ...(old ?? []).filter((item) => item.id !== created.id),
+              created,
+            ])
             chooseWorkspace(created.id)
             setCreatingWorkspace(false)
+            void queryClient.invalidateQueries({ queryKey: ['workspaces'] })
           }}
         />
       )}
@@ -1206,6 +1728,76 @@ export function App() {
           }}
           onSelect={chooseWorkspace}
         />
+      )}
+      {editingMessage && (
+        <Dialog
+          title="编辑消息并创建新分支"
+          onClose={() => {
+            if (!editingBusy && !editUnconfirmed) {
+              setEditingMessage(null)
+              setEditText('')
+              setEditError('')
+              editRequest.current = null
+            }
+          }}
+        >
+          <form
+            className="stacked-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void editMessage()
+            }}
+          >
+            <p>原对话与消息会保留。新分支将从此处使用修改后的内容重新生成。</p>
+            <label>
+              消息内容
+              <textarea
+                rows={8}
+                maxLength={1048576}
+                required
+                readOnly={editingBusy || editUnconfirmed}
+                value={editText}
+                onChange={(event) => setEditText(event.target.value)}
+              />
+            </label>
+            {editingMessage.attachments.length > 0 && (
+              <p className="page-note">
+                来源消息的附件由服务端保留，新分支继续沿用附件版本与授权。
+              </p>
+            )}
+            {editError && (
+              <p role="alert" className="form-error">
+                {editError}
+              </p>
+            )}
+            <div className="button-row">
+              <Button
+                disabled={editingBusy || editUnconfirmed}
+                onClick={() => {
+                  setEditingMessage(null)
+                  setEditText('')
+                  setEditError('')
+                  editRequest.current = null
+                }}
+              >
+                取消
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  editingBusy ||
+                  (!editUnconfirmed && (!editText.trim() || !effectiveModel || !optionsReady))
+                }
+              >
+                {editingBusy
+                  ? '正在创建…'
+                  : editUnconfirmed
+                    ? '核对本次编辑请求'
+                    : '创建分支并重新生成'}
+              </Button>
+            </div>
+          </form>
+        </Dialog>
       )}
       {forkSource && (
         <ForkDialog
@@ -1238,6 +1830,7 @@ function WorkspaceDialog({
 }) {
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
+  const [choosingDirectory, setChoosingDirectory] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   return (
@@ -1246,9 +1839,10 @@ function WorkspaceDialog({
         className="stacked-form"
         onSubmit={(event) => {
           event.preventDefault()
+          if (busy || !name.trim() || !path || choosingDirectory) return
           setBusy(true)
           setError('')
-          void onCreate(name.trim(), path.trim())
+          void onCreate(name.trim(), path)
             .catch((err) => setError(errorText(err)))
             .finally(() => setBusy(false))
         }}
@@ -1257,21 +1851,33 @@ function WorkspaceDialog({
           工作区名称
           <input
             required
+            maxLength={160}
             value={name}
+            disabled={busy}
             onChange={(event) => setName(event.target.value)}
             placeholder="为这个项目命名"
           />
         </label>
-        <label>
-          项目目录
-          <input
-            required
-            value={path}
-            onChange={(event) => setPath(event.target.value)}
-            placeholder="输入服务所在机器的现有绝对路径"
+        <div className="workspace-directory-field">
+          <span>项目目录</span>
+          {path && <output aria-label="已选项目目录">{path}</output>}
+          <Button disabled={busy} onClick={() => setChoosingDirectory(!choosingDirectory)}>
+            {choosingDirectory ? '收起文件夹' : path ? '更换文件夹' : '选择文件夹'}
+          </Button>
+        </div>
+        {choosingDirectory && (
+          <DirectoryPicker
+            initialPath={path || undefined}
+            onSelect={(selected) => {
+              setPath(selected)
+              if (!name.trim())
+                setName(selected.split(/[\\/]/).filter(Boolean).at(-1)?.slice(0, 160) ?? '工作区')
+              setChoosingDirectory(false)
+            }}
+            onCancel={() => setChoosingDirectory(false)}
           />
-        </label>
-        <p className="page-note">目录必须真实存在。工作区只在授权的目录范围内工作。</p>
+        )}
+        <p className="page-note">选择工作台所在电脑上的项目文件夹。</p>
         {error && (
           <p className="form-error" role="alert">
             {error}
@@ -1281,7 +1887,7 @@ function WorkspaceDialog({
           <Button disabled={busy} onClick={onClose}>
             取消
           </Button>
-          <Button type="submit" variant="primary" disabled={busy}>
+          <Button type="submit" variant="primary" disabled={busy || !path || choosingDirectory}>
             {busy ? '正在创建…' : '创建工作区'}
           </Button>
         </div>

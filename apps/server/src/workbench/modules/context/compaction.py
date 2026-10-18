@@ -386,7 +386,7 @@ def compact(db, run, messages, tools, context_window, max_output_tokens):
             # finished child results. It remains available in the original history.
             continue
         chosen[index] = group
-        if estimate(selected(), tools) > budget * 0.95:
+        if estimate(selected(), tools) > budget * 0.65:
             del chosen[index]
     artifact = db.get(Artifact, identifier)
     if artifact is None:

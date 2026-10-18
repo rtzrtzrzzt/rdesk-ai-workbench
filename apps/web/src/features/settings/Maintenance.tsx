@@ -1,5 +1,5 @@
 import { useSettingsAttention } from './SettingsGroup'
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '../../api/client'
 import { maintenanceApi } from '../../api/maintenance'
@@ -14,9 +14,8 @@ import { Button, Status } from '../../components/ui'
 import { formatBytes } from '../files/FileUpload'
 import { Cleanup } from './Cleanup'
 
-type RestoreMetadata = Omit<RestoreCreate, 'restored_owner_password'>
 type PendingMaintenance =
-  { kind: 'backup'; command: BackupCreate } | { kind: 'restore'; command: RestoreMetadata }
+  { kind: 'backup'; command: BackupCreate } | { kind: 'restore'; command: RestoreCreate }
 const storageKey = (userId: string) => `workbench.maintenance.${userId}`
 const statusLabels: Record<string, string> = {
   complete: '完整',
@@ -161,8 +160,6 @@ export function Maintenance({ userId }: { userId: string }) {
   const [selected, setSelected] = useState('')
   const [label, setLabel] = useState('')
   const [timeout, setTimeout] = useState('')
-  const [password, setPassword] = useState('')
-  const restoreSecret = useRef<string | null>(null)
   const [pending, setPending] = useState<PendingMaintenance | null>(() => readPending(userId))
   const [busy, setBusy] = useState(false)
   const [aborting, setAborting] = useState(false)
@@ -225,12 +222,6 @@ export function Maintenance({ userId }: { userId: string }) {
       if (command.kind === 'restore') {
         if (!original && actualBackup?.status !== 'complete')
           throw new Error('只允许从已完整发布的备份建立隔离副本。')
-        const secret = restoreSecret.current ?? password
-        if (secret.length < 12 || secret.length > 1024)
-          throw new Error(
-            '请输入至少 12 字符的新所有者口令。核对恢复须重新输入本次原口令；口令不会写入浏览器存储。',
-          )
-        restoreSecret.current = secret
       }
       store(command)
     } catch (error) {
@@ -239,7 +230,6 @@ export function Maintenance({ userId }: { userId: string }) {
       return
     }
     setBusy(true)
-    setPassword('')
     try {
       if (command.kind === 'backup') {
         const result = await maintenanceApi.create(command.command)
@@ -250,17 +240,11 @@ export function Maintenance({ userId }: { userId: string }) {
         setSelected(result.backup_id)
         setMessage(`备份状态：${statusLabels[result.status]}。`)
       } else {
-        const secret = restoreSecret.current
-        if (!secret) throw new Error('恢复口令已丢失，请重新输入本次原口令后手动核对。')
-        const result = await maintenanceApi.restore({
-          ...command.command,
-          restored_owner_password: secret,
-        })
+        const result = await maintenanceApi.restore(command.command)
         setRestoreResult(result)
         setMessage(`恢复状态：${statusLabels[result.status]}。`)
       }
       store(null)
-      restoreSecret.current = null
       await backups.refetch()
     } catch (error) {
       setFailure(true)
@@ -269,11 +253,6 @@ export function Maintenance({ userId }: { userId: string }) {
         error instanceof TypeError || (error instanceof ApiError && error.status >= 500)
       if (!uncertain && !original) {
         store(null)
-        restoreSecret.current = null
-      }
-      if (code === 'idempotency_conflict' && command.kind === 'restore') {
-        restoreSecret.current = null
-        setPassword('')
       }
       setMessage(
         `${error instanceof Error ? error.message : '维护请求未完成'}${code === 'maintenance_busy' ? ' 请等待安全停点后手动重试；不会自动停止用户任务。' : uncertain ? ' 结果未确认，请保留本次标识并手动核对。' : original ? ' 原请求标识保留；请先核对实际结果，不会自动创建新的副本。' : ''}`,
@@ -316,12 +295,7 @@ export function Maintenance({ userId }: { userId: string }) {
         <div className="memory-conflict">
           <strong>{pending.kind === 'backup' ? '备份' : '隔离恢复'}请求待确认</strong>
           <p>请求标识：{pending.command.request_id}。核对复用原参数。</p>
-          {pending.kind === 'restore' && (
-            <p>
-              备份：{pending.command.backup_id}
-              。口令不在浏览器持久存储中；离开页面后需重新输入本次相同口令。
-            </p>
-          )}
+          {pending.kind === 'restore' && <p>备份：{pending.command.backup_id}</p>}
         </div>
       )}
       <div className="maintenance-controls">
@@ -431,33 +405,10 @@ export function Maintenance({ userId }: { userId: string }) {
             恢复后任务保持
             held，模型权重和外部工作区原文件不会被复制；凭据、远程模型及搜索需重新授权。此操作不会启动隔离实例。
           </p>
-          {restoreSecret.current !== null ? (
-            <p className="page-note">
-              原口令仅保留在当前页面内存，用于原样核对；离开页面后不会保留。
-            </p>
-          ) : (
-            <label>
-              {pending?.kind === 'restore' ? '核对本次恢复的相同口令' : '隔离副本的新所有者口令'}
-              <input
-                type="password"
-                autoComplete="new-password"
-                minLength={12}
-                maxLength={1024}
-                value={password}
-                disabled={busy}
-                required={restoreSecret.current === null}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </label>
-          )}
           <Button
             type="submit"
             variant="primary"
-            disabled={
-              busy ||
-              (pending !== null && pending.kind !== 'restore') ||
-              (restoreSecret.current === null && password.length < 12)
-            }
+            disabled={busy || (pending !== null && pending.kind !== 'restore')}
           >
             {busy
               ? '正在执行维护…'

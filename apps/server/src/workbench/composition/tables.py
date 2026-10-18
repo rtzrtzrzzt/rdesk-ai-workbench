@@ -7,7 +7,8 @@ from workbench.modules.automation.domain import (
     DesktopWriterLease,
 )
 from workbench.modules.collaboration.domain import AgentMessage, AgentSlot
-from workbench.modules.conversations import Message, Thread
+from workbench.modules.context.domain import ThreadContext
+from workbench.modules.conversations import ConversationDeletion, Message, QueuedInput, Thread
 from workbench.modules.files.domain import Artifact, Upload
 from workbench.modules.identity import AccountCommandReceipt, AuthSession, LoginThrottle, User
 from workbench.modules.interactions import Approval, Question
@@ -58,6 +59,9 @@ __all__ = [
     "ModelConnection",
     "ModelRevision",
     "Thread",
+    "ThreadContext",
+    "QueuedInput",
+    "ConversationDeletion",
     "Message",
     "Run",
     "Job",

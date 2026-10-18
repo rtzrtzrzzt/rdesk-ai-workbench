@@ -2,10 +2,13 @@ import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, RefreshCw } from 'lucide-react'
 import { api } from '../../api/workbench'
+import { conversationsApi } from '../../api/conversations'
 import type { AgentView, Run, RunTrace } from '../../api/types'
 import { Button, Status } from '../../components/ui'
+import { Dialog } from '../../components/Dialog'
+import { SubagentTranscript } from './SubagentTranscript'
 import { RunInteractions } from './RunInteractions'
-import { runTerminal, runLabel as label, acceptsInput } from './runState'
+import { runTerminal, runLabel as label, runStatusLabel, acceptsInput } from './runState'
 import { MessageContent } from './MessageContent'
 import { StateArtifact } from './StateArtifact'
 import { RunSurfaces } from '../generated/RunSurfaces'
@@ -98,12 +101,10 @@ function ChildAgent({
   agent,
   workspaceId,
   onRefresh,
-  onOpenThread,
 }: {
   agent: AgentView
   workspaceId: string
   onRefresh: () => Promise<void>
-  onOpenThread: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [cancelling, setCancelling] = useState(false)
@@ -117,107 +118,201 @@ function ChildAgent({
   })
   return (
     <section className="child-agent">
-      <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-        <summary>
-          <strong>{agent.name}</strong>
-          <Status tone={agent.run.status === 'failed' ? 'warning' : 'neutral'}>
-            {label(agent.run.status)}
-          </Status>
-          <small>{agent.released_at ? '名额已释放' : '占用名额'}</small>
-        </summary>
-        <p>{agent.deliverable}</p>
-        <dl className="run-meta">
-          <dt>Agent</dt>
-          <dd>{agent.agent_id}</dd>
-          <dt>Run</dt>
-          <dd>{agent.run.id}</dd>
-          <dt>模式</dt>
-          <dd>{agent.mode}</dd>
-          <dt>路径范围</dt>
-          <dd>{agent.paths.length ? agent.paths.join('\n') : '无已授予路径'}</dd>
-          <dt>允许工具</dt>
-          <dd>{agent.allowed_tools.length ? agent.allowed_tools.join('、') : '无已授予工具'}</dd>
-        </dl>
-        {agent.run.status === 'waiting_resource' && (
-          <p className="page-note">等待模型准入或其他资源，以实际运行状态为准；不推测队列位置。</p>
-        )}
-        {agent.run.error && (
-          <p role="alert" className="form-error">
-            {agent.run.error.message}（{agent.run.error.code}）
-          </p>
-        )}
-        {agent.run.state_artifact_id && (
-          <StateArtifact workspaceId={workspaceId} artifactId={agent.run.state_artifact_id} />
-        )}
-        <RunSurfaces run={agent.run} workspaceId={workspaceId} active={open} />
-        <CommandsPanel
-          workspaceId={workspaceId}
-          runId={agent.run.id}
-          active={open}
-          runActive={!runTerminal.has(agent.run.status)}
-        />
-        <h4>实际结果</h4>
-        {agent.result !== null ? (
-          <MessageContent content={agent.result} />
-        ) : (
-          <p className="page-note">尚无已发布结果。</p>
-        )}
-        <div className="button-row">
-          {agent.run.thread_id && (
-            <Button
-              onClick={() => {
-                if (agent.run.thread_id) onOpenThread(agent.run.thread_id)
-              }}
-            >
-              打开 Agent 对话
-            </Button>
+      <button
+        className="agent-entry"
+        onClick={() => setOpen(true)}
+        type="button"
+        aria-label={`查看子任务：${agent.name}`}
+      >
+        <strong>{agent.name}</strong>
+        <Status tone={agent.run.status === 'failed' ? 'warning' : 'neutral'}>
+          {runStatusLabel(agent.run)}
+        </Status>
+        <span>
+          查看对话 <ChevronDown size={13} />
+        </span>
+      </button>
+      {open && (
+        <Dialog
+          title={`子任务 · ${agent.name}`}
+          className="agent-dialog"
+          onClose={() => setOpen(false)}
+        >
+          <SubagentTranscript agent={agent} workspaceId={workspaceId} />
+          {agent.run.status === 'paused' && <PausedChild run={agent.run} onRefresh={onRefresh} />}
+          <RunInteractions run={agent.run} onRefresh={onRefresh} />
+          <details className="agent-technical">
+            <summary>高级信息与执行记录</summary>
+            <dl className="run-meta">
+              <dt>Agent</dt>
+              <dd>{agent.agent_id}</dd>
+              <dt>Run</dt>
+              <dd>{agent.run.id}</dd>
+              <dt>模式</dt>
+              <dd>{agent.mode}</dd>
+              <dt>路径范围</dt>
+              <dd>{agent.paths.length ? agent.paths.join('\n') : '无已授予路径'}</dd>
+              <dt>允许工具</dt>
+              <dd>
+                {agent.allowed_tools.length ? agent.allowed_tools.join('、') : '无已授予工具'}
+              </dd>
+            </dl>
+            {agent.run.status === 'waiting_resource' && (
+              <p className="page-note">
+                等待模型准入或其他资源，以实际运行状态为准；不推测队列位置。
+              </p>
+            )}
+            {agent.run.error && (
+              <p role="alert" className="form-error">
+                {agent.run.error.message}（{agent.run.error.code}）
+              </p>
+            )}
+            {agent.run.state_artifact_id && (
+              <StateArtifact workspaceId={workspaceId} artifactId={agent.run.state_artifact_id} />
+            )}
+            <RunSurfaces run={agent.run} workspaceId={workspaceId} active={open} />
+            <CommandsPanel
+              workspaceId={workspaceId}
+              runId={agent.run.id}
+              active={open}
+              runActive={!runTerminal.has(agent.run.status)}
+            />
+            <h4>已发布结果</h4>
+            {agent.result !== null && (
+              <MessageContent content={agent.result} workspaceId={workspaceId} />
+            )}
+          </details>
+          <div className="button-row">
+            {!runTerminal.has(agent.run.status) && (
+              <Button
+                disabled={cancelling || agent.run.status === 'cancelling'}
+                onClick={() => {
+                  setCancelling(true)
+                  setError('')
+                  cancelId.current ??= crypto.randomUUID()
+                  void api
+                    .cancelRun(agent.run.id, cancelId.current)
+                    .then(onRefresh)
+                    .catch((e) => setError(e instanceof Error ? e.message : '停止请求未确认'))
+                    .finally(() => setCancelling(false))
+                }}
+              >
+                {cancelling ? '正在请求停止…' : '停止此 Agent'}
+              </Button>
+            )}
+          </div>
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
           )}
-          {!runTerminal.has(agent.run.status) && (
-            <Button
-              disabled={cancelling || agent.run.status === 'cancelling'}
-              onClick={() => {
-                setCancelling(true)
-                setError('')
-                cancelId.current ??= crypto.randomUUID()
-                void api
-                  .cancelRun(agent.run.id, cancelId.current)
-                  .then(onRefresh)
-                  .catch((e) => setError(e instanceof Error ? e.message : '停止请求未确认'))
-                  .finally(() => setCancelling(false))
-              }}
-            >
-              {cancelling ? '正在请求停止…' : '停止此 Agent'}
-            </Button>
-          )}
-        </div>
-        {error && (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        )}
-        <RunInteractions run={agent.run} onRefresh={onRefresh} historyOnly />
-        {trace.isError ? (
-          <ReadError error={trace.error} retry={() => void trace.refetch()} />
-        ) : trace.data ? (
-          <TraceContent trace={trace.data} />
-        ) : (
-          <p className="page-note">正在读取 Agent 追溯…</p>
-        )}
-      </details>
+          <details className="agent-technical">
+            <summary>调试追溯</summary>
+            {trace.isError ? (
+              <ReadError error={trace.error} retry={() => void trace.refetch()} />
+            ) : trace.data ? (
+              <TraceContent trace={trace.data} />
+            ) : (
+              <p className="page-note">正在读取 Agent 追溯…</p>
+            )}
+          </details>
+        </Dialog>
+      )}
     </section>
   )
 }
-export function RunPanel({
-  run,
-  workspaceId,
-  onOpenThread,
-}: {
-  run: Run
-  workspaceId: string
-  onOpenThread: (id: string) => void
-}) {
-  const client = useQueryClient()
+
+function PausedChild({ run, onRefresh }: { run: Run; onRefresh: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const pending = useRef<{ extend: boolean; id: string } | null>(null)
+  async function resume(extend: boolean) {
+    if (busy) return
+    if (!pending.current || pending.current.extend !== extend)
+      pending.current = { extend, id: crypto.randomUUID() }
+    setBusy(true)
+    setError('')
+    try {
+      await conversationsApi.resumeRun(run.id, pending.current.id, extend)
+      pending.current = null
+      await onRefresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '子任务恢复未完成。')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="run-visible-error">
+      <strong>子任务已暂停</strong>
+      <p>{run.paused_reason?.message}</p>
+      <div className="button-row">
+        <Button disabled={busy} onClick={() => void resume(false)}>
+          {['repeated_tool_call', 'no_progress'].includes(run.paused_reason?.code ?? '')
+            ? '重新规划并继续此 Agent'
+            : '继续此 Agent'}
+        </Button>
+        {['round_limit', 'root_model_budget', 'model_output_limit'].includes(
+          run.paused_reason?.code ?? '',
+        ) && (
+          <Button disabled={busy} onClick={() => void resume(true)}>
+            {run.paused_reason?.code === 'model_output_limit'
+              ? '使用剩余上下文并继续'
+              : '扩展此 Agent 预算并继续'}
+          </Button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="form-error">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+/** Technical controls live on the task page, away from the conversation timeline. */
+export function RunDetails({ run, workspaceId }: { run: Run; workspaceId: string }) {
   const [open, setOpen] = useState(false)
+  const trace = useQuery({
+    queryKey: ['run-trace', run.id],
+    queryFn: () => api.trace(run.id),
+    enabled: open,
+    refetchInterval: open && !runTerminal.has(run.status) ? 4000 : false,
+  })
+  return (
+    <details className="task-details" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>高级信息、命令与日志</summary>
+      {open && (
+        <div className="run-panel-body">
+          <p className="page-note">Run {run.id}</p>
+          {run.state_artifact_id && (
+            <StateArtifact workspaceId={workspaceId} artifactId={run.state_artifact_id} />
+          )}
+          <CommandsPanel
+            workspaceId={workspaceId}
+            runId={run.id}
+            active={open}
+            runActive={!runTerminal.has(run.status)}
+          />
+          <h3>执行追溯</h3>
+          {trace.isError ? (
+            <ReadError error={trace.error} retry={() => void trace.refetch()} />
+          ) : trace.data ? (
+            <TraceContent trace={trace.data} />
+          ) : (
+            <p className="page-note">正在读取真实执行记录…</p>
+          )}
+        </div>
+      )}
+    </details>
+  )
+}
+
+export function RunPanel({ run, workspaceId }: { run: Run; workspaceId: string }) {
+  const client = useQueryClient()
+  const [resuming, setResuming] = useState(false)
+  const [resumeError, setResumeError] = useState('')
+  const resumeCommand = useRef<{ key: string; id: string } | null>(null)
   const rootId = run.root_run_id ?? run.id
   const tree = useQuery({
     queryKey: ['run-agents', rootId],
@@ -225,12 +320,6 @@ export function RunPanel({
     refetchInterval: !runTerminal.has(run.status) && run.status !== 'held' ? 4000 : false,
   })
   const root = tree.data?.root ?? (rootId === run.id ? run : undefined)
-  const trace = useQuery({
-    queryKey: ['run-trace', rootId],
-    queryFn: () => api.trace(rootId),
-    enabled: open,
-    refetchInterval: open && (!root || !runTerminal.has(root.status)) ? 4000 : false,
-  })
   async function refresh() {
     await Promise.all([
       client.invalidateQueries({ queryKey: ['run-agents', rootId] }),
@@ -240,8 +329,51 @@ export function RunPanel({
       client.invalidateQueries({ queryKey: ['messages'] }),
     ])
   }
+  async function resume(extend: boolean) {
+    if (!root || resuming) return
+    const key = `${root.id}:${extend}`
+    if (resumeCommand.current?.key !== key) resumeCommand.current = { key, id: crypto.randomUUID() }
+    setResuming(true)
+    setResumeError('')
+    try {
+      await conversationsApi.resumeRun(root.id, resumeCommand.current.id, extend)
+      resumeCommand.current = null
+      await refresh()
+    } catch (err) {
+      setResumeError(err instanceof Error ? err.message : '恢复任务未完成。')
+    } finally {
+      setResuming(false)
+    }
+  }
   return (
     <section className="run-panel">
+      {root?.status === 'paused' && (
+        <div className="run-visible-error">
+          <strong>任务已暂停</strong>
+          <p>{root.paused_reason?.message ?? '请确认后继续任务。'}</p>
+          <div className="button-row">
+            <Button disabled={resuming} onClick={() => void resume(false)}>
+              {['repeated_tool_call', 'no_progress'].includes(root.paused_reason?.code ?? '')
+                ? '重新规划并继续'
+                : '继续任务'}
+            </Button>
+            {['round_limit', 'root_model_budget', 'model_output_limit'].includes(
+              root.paused_reason?.code ?? '',
+            ) && (
+              <Button disabled={resuming} onClick={() => void resume(true)}>
+                {root.paused_reason?.code === 'model_output_limit'
+                  ? '使用剩余上下文并继续'
+                  : '扩展预算并继续'}
+              </Button>
+            )}
+          </div>
+          {resumeError && (
+            <p role="alert" className="form-error">
+              {resumeError}
+            </p>
+          )}
+        </div>
+      )}
       {root?.error && (
         <p className="run-visible-error form-error" role="alert">
           {root.error.message}
@@ -252,66 +384,25 @@ export function RunPanel({
           恢复的任务已暂停，历史确认保持只读。可停止此任务后继续新消息。
         </p>
       )}
-      <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-        <summary>
-          <span>任务 · {root ? label(root.status) : '读取根任务…'}</span>
-          {!!tree.data?.agents.length && <small>{tree.data.agents.length} 个协作任务</small>}
-          <ChevronDown size={15} />
-        </summary>
-        <div className="run-panel-body">
-          <div className="run-line">
-            <small>根 Run {rootId}</small>
-            <Button disabled={tree.isFetching} onClick={() => void refresh()}>
-              刷新任务
-            </Button>
-          </div>
-          <p className="page-note">
-            子 Agent 的完成与名额释放单独记录；整体是否完成以根任务状态为准。
+      {!!tree.data?.agents.length && (
+        <div className="agent-entries" aria-label="子任务">
+          <p className="agent-entries-label">
+            子任务 · {tree.data.agents.filter((agent) => agent.run.status === 'succeeded').length}/
+            {tree.data.agents.length} 已完成
           </p>
-          {root?.error && (
-            <p className="form-error" role="alert">
-              {root.error.message}
-            </p>
-          )}
-          {tree.isError && <ReadError error={tree.error} retry={() => void tree.refetch()} />}
-          {root?.state_artifact_id && (
-            <StateArtifact workspaceId={workspaceId} artifactId={root.state_artifact_id} />
-          )}
-          <CommandsPanel
-            workspaceId={workspaceId}
-            runId={rootId}
-            active={open}
-            runActive={!root || !runTerminal.has(root.status)}
-          />
-          <h3>根任务追溯</h3>
-          {trace.isError ? (
-            <ReadError error={trace.error} retry={() => void trace.refetch()} />
-          ) : trace.data ? (
-            <TraceContent trace={trace.data} />
-          ) : (
-            <p className="page-note">正在读取真实执行记录…</p>
-          )}
-          <h3>Agent 协作</h3>
-          {tree.data?.agents.length ? (
-            tree.data.agents.map((agent) => (
-              <ChildAgent
-                key={agent.agent_id}
-                agent={agent}
-                workspaceId={workspaceId}
-                onRefresh={refresh}
-                onOpenThread={onOpenThread}
-              />
-            ))
-          ) : (
-            <p className="page-note">
-              {tree.data ? '本任务尚未派生 Agent。' : '正在读取 Agent 状态…'}
-            </p>
-          )}
+          {tree.data.agents.map((agent) => (
+            <ChildAgent
+              key={agent.agent_id}
+              agent={agent}
+              workspaceId={workspaceId}
+              onRefresh={refresh}
+            />
+          ))}
         </div>
-      </details>
+      )}
       {root && <RunSurfaces run={root} workspaceId={workspaceId} active />}
       {root && <RunInteractions run={root} onRefresh={refresh} />}
-      {tree.isError && !open && <ReadError error={tree.error} retry={() => void tree.refetch()} />}
+      {tree.isError && <ReadError error={tree.error} retry={() => void tree.refetch()} />}
       {tree.data?.agents
         .filter(
           (agent) =>

@@ -4,60 +4,11 @@ import { filesApi } from '../../api/files'
 import { surfacesApi } from '../../api/surfaces'
 import type { ArtifactView, Run, SurfaceView } from '../../api/types'
 import { Button } from '../../components/ui'
-import { Dialog } from '../../components/Dialog'
+import { FilePreview } from '../chat/FilePreview'
 import { TrustedSurface } from './TrustedSurface'
 import type { FileLinkRequest } from './types'
-import { plainJSON } from './validation'
 import './surfaces.css'
 const terminal = new Set(['succeeded', 'failed', 'cancelled'])
-function SourcePreview({
-  workspaceId,
-  artifact,
-  onClose,
-}: {
-  workspaceId: string
-  artifact: ArtifactView
-  onClose: () => void
-}) {
-  const preview = useQuery({
-    queryKey: ['artifact-preview', workspaceId, artifact.id],
-    queryFn: () => filesApi.preview(workspaceId, artifact.id),
-  })
-  return (
-    <Dialog title={artifact.filename} onClose={onClose}>
-      <div className="surface-source-preview">
-        <a href={filesApi.downloadUrl(workspaceId, artifact.id)} download>
-          下载原件
-        </a>
-        {preview.isError ? (
-          <div role="alert">
-            <p className="form-error">{preview.error.message}</p>
-            <Button onClick={() => void preview.refetch()}>重新读取预览</Button>
-          </div>
-        ) : preview.data ? (
-          <>
-            {preview.data.text !== null ? (
-              <pre>{preview.data.text}</pre>
-            ) : (
-              <p className="page-note">当前没有可读取文本，可查看元数据或下载原件。</p>
-            )}
-            {preview.data.truncated && (
-              <p className="file-partial-warning">文本预览已截断，完整内容可下载读取。</p>
-            )}
-            <details>
-              <summary>文件来源与预览元数据</summary>
-              <p>文件标识：{artifact.id}</p>
-              <p>版本：{artifact.version}</p>
-              <pre>{plainJSON(preview.data.metadata)}</pre>
-            </details>
-          </>
-        ) : (
-          <p className="page-note">正在读取受管预览…</p>
-        )}
-      </div>
-    </Dialog>
-  )
-}
 function SurfaceSnapshot({
   view,
   workspaceId,
@@ -143,7 +94,7 @@ export function RunSurfaces({
         </p>
       )}
       {file && (
-        <SourcePreview
+        <FilePreview
           key={`${workspaceId}:${file.id}:${file.version}`}
           workspaceId={workspaceId}
           artifact={file}

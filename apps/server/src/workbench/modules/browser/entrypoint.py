@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from workbench.config import get_settings
 from workbench.contracts.errors import AppError
+from workbench.modules.automation.forget import SessionForgotten
 from workbench.modules.browser.dto import (
     ActionEnvelope,
     BrowserActionResult,
@@ -119,6 +120,10 @@ def create_app(service: BrowserService, *, on_shutdown=None, authorize=None) -> 
     @app.post("/sessions/{session_id}/stop", response_model=BrowserStop)
     async def stop(session_id: UUID, owner: BrowserOwner):
         return await service.stop(owner, str(session_id))
+
+    @app.post("/sessions/{sid}/forget", response_model=SessionForgotten)
+    async def forget(sid: UUID, owner: BrowserOwner):
+        return await service.forget(owner, str(sid))
 
     return app
 

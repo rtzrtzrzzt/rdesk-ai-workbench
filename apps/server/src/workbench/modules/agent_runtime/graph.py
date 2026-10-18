@@ -39,11 +39,94 @@ async def model_node(state: State) -> dict:
             }
         )
     return {
-        "messages": state["messages"] + [assistant],
+        "messages": state["messages"] + assistant.get("_continuation_messages", []) + [assistant],
         "calls": calls,
         "call_index": 0,
         "round_number": state["round_number"] + 1,
     }
+
+
+async def checkpoint_node(state: State) -> dict:
+    from workbench.modules.runs.safety import acknowledge, before_model
+
+    wait = await asyncio.to_thread(
+        before_model,
+        state["run_id"],
+        state["round_number"],
+        state.get("call_index", 0) >= len(state.get("calls", [])),
+    )
+    if wait:
+        interrupt(wait)
+        await asyncio.to_thread(acknowledge, state["run_id"], wait)
+        if wait["kind"] == "safety" and state.get("call_index", 0) < len(state.get("calls", [])):
+            # Resume a rejected batch by replanning, rather than executing the
+            # remaining stale calls before the user's steering can be applied.
+            return await skip_pending_calls(
+                state,
+                "tool_skipped_for_replan",
+                "防循环暂停后，此调用未执行；请结合用户补充重新规划。",
+            )
+    if state.get("call_index", 0) < len(state.get("calls", [])):
+        from workbench.modules.collaboration.inbox import has_new_user_input
+
+        def pending_user():
+            with Session(engine()) as db:
+                return has_new_user_input(db, state["run_id"])
+
+        if await asyncio.to_thread(pending_user):
+            return await skip_pending_calls(
+                state, "tool_skipped_for_steering", "用户补充了新要求，此调用尚未执行，请重新规划。"
+            )
+    return {}
+
+
+async def skip_pending_calls(state: State, code: str, message: str) -> dict:
+    replies = []
+    call_index = state["call_index"]
+    for call in state["calls"][state["call_index"] :]:
+        content = await asyncio.to_thread(pending_call_result, state["run_id"], call, code, message)
+        if content is None:
+            # A recovered command/MCP continuation must finish or reconcile its
+            # actual result before steering can skip the rest of the batch.
+            break
+        reply = {
+            "role": "tool",
+            "_operation_id": None,
+            "tool_call_id": call["provider_call_id"],
+            "content": json.dumps(content, ensure_ascii=False),
+        }
+        await asyncio.to_thread(persist_reply, state["run_id"], call, reply)
+        replies.append(reply)
+        call_index += 1
+    return {"messages": state["messages"] + replies, "call_index": call_index}
+
+
+def pending_call_result(run_id: str, call: dict, code: str, message: str) -> dict | None:
+    from workbench.modules.runs.domain import Run
+    from workbench.modules.tools.domain import Operation
+    from workbench.modules.tools.service import record_result
+
+    result = {"error": {"code": code, "message": message}}
+    operation_id = None
+    with Session(engine()) as db, db.begin():
+        db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        assert_owned(db, run_id)
+        operation = db.scalar(
+            select(Operation).where(
+                Operation.run_id == run_id, Operation.tool_call_id == call["id"]
+            )
+        )
+        if operation:
+            if operation.status in {"succeeded", "failed"} and operation.result is not None:
+                return model_view(call["name"], operation.result)
+            if operation.status in {"running", "waiting_input", "outcome_unknown"} or (
+                operation.effect_status != "not_started"
+            ):
+                return None
+            operation_id = operation.id
+    if operation_id:
+        record_result(run_id, operation_id, result, effect_status="not_started")
+    return result
 
 
 async def tool_node(state: State) -> dict:
@@ -108,7 +191,7 @@ def persist_reply(run_id: str, call: dict, reply: dict) -> None:
 
 
 def after_model(state: State) -> str:
-    return "tool" if state["calls"] else "join_check"
+    return "checkpoint" if state["calls"] else "join_check"
 
 
 async def join_check_node(state: State) -> dict:
@@ -140,7 +223,8 @@ async def join_node(state: State) -> dict:
                 "role": "user",
                 "source_kind": "agent_results",
                 "content": (
-                    "子任务已经结束，请依据真实结果完成主任务整合，失败项如实说明。\n"
+                    "子任务的当前实际状态如下（可能仍在执行）。请先处理用户最新补充要求，"
+                    "再依据真实结果继续主任务；失败项如实说明。\n"
                     + json.dumps(model_view("inspect_agents", result), ensure_ascii=False)
                 ),
             }
@@ -149,23 +233,34 @@ async def join_node(state: State) -> dict:
 
 
 def after_tool(state: State) -> str:
-    return "tool" if state["call_index"] < len(state["calls"]) else "model"
+    return "checkpoint"
 
 
 def build_graph(checkpointer):
     builder = StateGraph(State)
+    builder.add_node("checkpoint", checkpoint_node)
     builder.add_node("model", model_node)
     builder.add_node("tool", tool_node)
     builder.add_node("join", join_node)
     builder.add_node("join_check", join_check_node)
-    builder.add_edge(START, "model")
+    builder.add_edge(START, "checkpoint")
+    builder.add_conditional_edges(
+        "checkpoint",
+        lambda state: (
+            "tool" if state.get("call_index", 0) < len(state.get("calls", [])) else "model"
+        ),
+    )
     builder.add_conditional_edges("model", after_model)
     builder.add_conditional_edges("tool", after_tool)
     builder.add_conditional_edges(
         "join_check",
         lambda state: (
-            "join" if state.get("join_needed") else "model" if state.get("input_pending") else END
+            "join"
+            if state.get("join_needed")
+            else "checkpoint"
+            if state.get("input_pending")
+            else END
         ),
     )
-    builder.add_edge("join", "model")
+    builder.add_edge("join", "checkpoint")
     return builder.compile(checkpointer=checkpointer)

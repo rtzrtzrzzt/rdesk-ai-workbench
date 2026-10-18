@@ -1,6 +1,6 @@
 # 当前 Flash-Next 的 S0 部署
 
-只使用本机既有 NVIDIA 权重，固定修订见 `deployment.json`。本页针对当前 Spark 项目部署；通用源码发行包刻意不携带这份主机专属配置和验证证据，使用模型辅助脚本前须另行准备匹配的本机配置/环境，不能直接把其他机器的 verified 标记当成自己的验收结果。独立虚拟环境位于 `.runtime/model-env`，权重保持原目录；PLE backing、编译缓存、日志与真实结果存放在 `.local/model`。不自动下载模型、切换模型、连接外部 API 或启用 MTP。
+只使用本机既有 NVIDIA 权重，固定修订见 `deployment.json`。本页针对当前 Spark 项目部署；通用源码发行包刻意不携带这份主机专属配置和验证证据，使用模型辅助脚本前须另行准备匹配的本机配置/环境，不能直接把其他机器的 verified 标记当成自己的验收结果。独立虚拟环境位于 `.runtime/model-env`，权重保持原目录；PLE backing、编译缓存、日志与真实结果存放在 `.local/model`。不自动下载模型、切换模型或连接外部 API；MTP 仅由部署清单的显式布尔值开启。
 
 官方 SGLang `v0.5.21` 的确切提交为 `e00930c5489053f26d86b179cee0d087f846acbb`。其 `qwen4_exp.py` 从 NVIDIA MIXED_PRECISION 配置识别 FP8 PLE；`qwen4_exp_ple_table.py` 提供 `file` backend，明确面向 GB10 UMA。主机 CUDA 13.0.3；约束将 NVCC、NVRTC、CUDA 绑定固定在 13.0，其他 NVIDIA 组件按实际依赖锁记录，不把所有组件版本统称为 13.0。安装完成后生成本环境的 `requirements.lock`，实际已安装包证据见 `.local/model/evidence/environment-packages.json`，pip安装来源报告见 `installed-packages.json`。文件存在和安装成功均不代表模型真实验收通过。
 
@@ -12,7 +12,29 @@ python3 scripts/model/modelctl.py plan
 python3 scripts/model/modelctl.py serve --fresh-ple
 ```
 
-`serve` 前台运行；从另一终端查看 `python3 scripts/model/modelctl.py status`。它先执行小型 CUDA 环境检查，监听 loopback 30000，当前限制 32768 上下文和并发 1。官方非生成入口 `/ready` 成功才记 `ready`（此版本 `/health` 默认会生成一个 token）；每 2 秒采样系统内存。MemAvailable 低于 8 GiB 即停止本次监管的进程树，不自动重载；`stop` 只向本 runner 记录的、启动标识一致的进程请求停止。这套 CUDA 模型监管依赖 Linux subreaper 与 pidfd，不声明可直接运行在 macOS 或 Windows。
+`serve` 前台运行；从另一终端查看 `python3 scripts/model/modelctl.py status`。它先执行小型 CUDA 环境检查，监听 loopback 30000，当前限制 131072（128K）上下文和并发 1，MTP 已按用户要求开启。官方非生成入口 `/ready` 成功才记 `ready`（此版本 `/health` 默认会生成一个 token）；每 2 秒采样系统内存。MemAvailable 低于 8 GiB 即停止本次监管的进程树，不自动重载；`stop` 只向本 runner 记录的、启动标识一致的进程请求停止。这套 CUDA 模型监管依赖 Linux subreaper 与 pidfd，不声明可直接运行在 macOS 或 Windows。
+
+### 引擎启动边界与 MTP
+
+`scripts/model/engines.py` 独立提供命令生成、非生成 readiness 和引擎扩展声明；它不导入推理运行时、不加载张量，也不接管 host guard、锁、停止或 PLE 轮换。当前受监管启动只支持已安装且通过既有环境检查的 SGLang/Qwen4Exp/file-PLE 配方，未知引擎、缺少 Python 或不匹配架构明确失败。`modelctl.py command()` 与 `health()` 按 `engine` 分派，原有监管边界继续负责实际进程。
+
+当 `deployment.json` 的 `mtp` 为 JSON `true` 时，命令增加 `NEXTN`、steps 3、topk 1、draft tokens 4 和 Triton verify；`false` 或缺省不增加 speculative 参数。草稿使用同一 checkpoint 自带的 MTP 头，保留 `modelopt_mixed` 自动识别和 `flashinfer_cutlass`，不指定其他草稿权重或强制量化。`enable_metrics` 也必须显式为 JSON `true` 才增加 `--enable-metrics`；缺省时 `/metrics` 仍不可用。字符串 `"false"` 不作为布尔值接受。此处是启动契约，MTP 生效、实际 KV 容量、128K 完整流程及速度以新服务日志和真实请求验收为准，历史非 MTP 证据不自动继承。
+
+`vllm`、`llama_cpp`、`tensorrt_llm` 仅支持显式 `management_mode: "external"`，并配置 `external_base_url: "http://127.0.0.1:端口/v1"` 与 `served_model_name` 的既有服务。readiness 查询 `/v1/models` 并匹配模型 ID；它只证明该端点声明该模型在线，不证明当前 NVIDIA 权重在该引擎兼容、已安装或已验收。没有这些引擎的本机启动配方时 `plan`/`serve` 拒绝生成 SGLang 命令；请使用它们已有服务管理器独立启动和验证，不能通过更换 `engine` 自动安装、转换权重或继承当前能力。外部模式不执行本工具的启停接管。
+
+SGLang 声明 `/ready`、请求级 `/abort_request`、Chat 同模板计数 `/v1/tokenize` 及按配置开启的 `/metrics`；外部 OpenAI 端点不自动具有后三项扩展。引擎接口支持、部署模型证据和 host guard 的进程所有权是不同事实。命令辅助检查可运行 `python3 -m unittest discover -s tests -p test_model_engines.py`，该检查只读取真实部署清单和模型 JSON，不导入模型或请求推理。
+
+### 2026-10-18 MTP 与 128K 实测
+
+本轮在主/隔离实例无运行任务时停止旧模型，guard 确认 `linux_subreaper_echild` 后清理一份未使用旧 PLE 世代，并对同一固定权重执行 `serve --fresh-ple`。新 runner 于 13:45:54 UTC 开始、13:58:04 UTC ready，约12分10秒；证据 `.local/model/evidence/20261018T134601Z`。实际参数把 NEXTN 解析为 EAGLE，steps3/topk1/draft4，Triton verify、MTP头和131072窗口均由运行服务确认。不能把此前9分35秒的32K/MTP关闭加载时间挪用为本次结果。
+
+真实浏览器提交未重复填充的项目文档与源码，提供方实测输入123775、输出604（含思考270）、总124379 token，正常 stop，准确回答源码版本/许可证、唯一编排运行时和末尾源码里的MTP参数。应用同模板分词计数与提供方输入一致；请求约136.98秒，首可见约116.10秒，主要等待长输入prefill，不能将其端到端速率当解码速度。长历史自动压缩及压缩中Steer也使用真实模型与原消息，原文保持可恢复。界面与真实用量证据在 `.local/context-performance-acceptance/`，详细边界见[状态清单](../../docs/implementation-status.md)。
+
+短文本SSE样本219输出token/11.07秒，首正文0.607秒，约19.8 token/s；长请求部分服务端解码区间约24～31 token/s。样本条件不同，不能声称所有任务固定达到这一速度或把局部峰值当持续吞吐。MTP通过同一checkpoint的预测头提前提出多个token，再由主模型批量验证；接受率高时减少串行步数，不需要把CPU所有核心占满。不会因CPU空闲就自动提高线程、并发或CPU亲和设置。
+
+固定权重的 `generation_config.json` 默认 temperature1.0/top_k20/top_p0.95，产品留空时保留服务默认。一次关闭思考且temperature0的直连工具辅助检查能读写，但五轮重复后未给最终答复，结果保留为未通过；真实工作台启用low思考、使用服务默认采样时，两份文档各读取一次并正常完成答复。该差异不足以单独证明MTP或采样参数是唯一原因。官方建议分别考虑思考/非思考采样及任务总耗时，不把降低思考强度当稳定加速保证：[Qwen模型卡](https://huggingface.co/Qwen/Qwen3.8-Flash-Next)。历史图像、前缀缓存等证据须单独标记新部署验证状态。
+
+本轮随后对同一新部署读取既有真实工作台截图，四个标签匹配、1395 image_tokens，图像只发送至本地模型；主入口真实请求观察到1856 token前缀缓存命中，来源为 `sglang.request.cached_tokens_details`。这两项已写入当前配置的能力索引；缓存仅验证本次真实命中，没有挪用旧8K冷/热时延结论。最小MemAvailable约18.34GiB，guard仍为8GiB。实际记录见 `.local/context-performance-acceptance/model-validation-summary.json`。
 
 ### 管理命令的短锁与启动意图（2026-10-18）
 

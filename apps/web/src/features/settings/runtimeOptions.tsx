@@ -18,12 +18,13 @@ export const runOptionFields: {
   integer: boolean
 }[] = [
   { key: 'child_agent_limit', label: '子 Agent 名额上限', min: 0, max: 3, integer: true },
-  { key: 'max_model_rounds', label: '单任务模型轮数上限', min: 1, max: 64, integer: true },
+  { key: 'checkpoint_rounds', label: '阶段检查点模型轮数', min: 1, max: 128, integer: true },
+  { key: 'max_model_rounds', label: '单任务模型轮数预算', min: 1, max: 65536, integer: true },
   {
     key: 'root_model_attempt_limit',
     label: '整个任务树模型尝试预算',
     min: 1,
-    max: 200,
+    max: 524288,
     integer: true,
   },
   { key: 'model_retry_limit', label: '模型请求重试上限', min: 0, max: 2, integer: true },
@@ -44,7 +45,8 @@ export function validOption(key: NumericKey, value: unknown) {
 export function validRunOptions(value: RunOptions) {
   return (
     runOptionFields.every((field) => validOption(field.key, value[field.key])) &&
-    (value.sandbox_profile === 'native_scoped' || value.sandbox_profile === 'linux_bwrap')
+    (value.sandbox_profile === 'native_scoped' || value.sandbox_profile === 'linux_bwrap') &&
+    (value.approval_mode === 'smart' || value.approval_mode === 'manual')
   )
 }
 export function validOverrides(value: RunOptionOverrides) {
@@ -52,6 +54,9 @@ export function validOverrides(value: RunOptionOverrides) {
     (value.sandbox_profile == null ||
       value.sandbox_profile === 'native_scoped' ||
       value.sandbox_profile === 'linux_bwrap') &&
+    (value.approval_mode == null ||
+      value.approval_mode === 'smart' ||
+      value.approval_mode === 'manual') &&
     runOptionFields.every(
       (field) =>
         value[field.key] === undefined ||
@@ -82,39 +87,55 @@ export function RunOptionsFields({
 }) {
   return (
     <>
-      <div className="run-option-fields">
-        {runOptionFields.map((field) => (
-          <label key={field.key}>
-            {field.label}
-            <input
-              type="number"
-              min={field.min}
-              max={field.max}
-              step={field.integer ? 1 : 'any'}
-              required
-              disabled={disabled}
-              value={value[field.key] ?? ''}
-              onChange={(event) => {
-                const next = { ...value }
-                if (event.target.value === '') delete next[field.key]
-                else next[field.key] = Number(event.target.value)
-                onChange(next)
-              }}
-            />
-            <small>
-              {field.min}–{field.max}
-              {field.integer ? ' · 整数' : ' · 小数比例'}
-            </small>
-          </label>
-        ))}
-      </div>
-      <SandboxSelect
-        value={value.sandbox_profile}
-        disabled={disabled}
-        onChange={(sandbox_profile) => {
-          if (sandbox_profile) onChange({ ...value, sandbox_profile })
-        }}
-      />
+      <label>
+        审批方式
+        <select
+          value={value.approval_mode ?? 'smart'}
+          disabled={disabled}
+          onChange={(event) =>
+            onChange({ ...value, approval_mode: event.target.value as 'smart' | 'manual' })
+          }
+        >
+          <option value="smart">智能审批</option>
+          <option value="manual">手动审批</option>
+        </select>
+      </label>
+      <details className="runtime-advanced">
+        <summary>高级任务预算与执行设置</summary>
+        <div className="run-option-fields">
+          {runOptionFields.map((field) => (
+            <label key={field.key}>
+              {field.label}
+              <input
+                type="number"
+                min={field.min}
+                max={field.max}
+                step={field.integer ? 1 : 'any'}
+                required
+                disabled={disabled}
+                value={value[field.key] ?? ''}
+                onChange={(event) => {
+                  const next = { ...value }
+                  if (event.target.value === '') delete next[field.key]
+                  else next[field.key] = Number(event.target.value)
+                  onChange(next)
+                }}
+              />
+              <small>
+                {field.min}–{field.max}
+                {field.integer ? ' · 整数' : ' · 小数比例'}
+              </small>
+            </label>
+          ))}
+        </div>
+        <SandboxSelect
+          value={value.sandbox_profile}
+          disabled={disabled}
+          onChange={(sandbox_profile) => {
+            if (sandbox_profile) onChange({ ...value, sandbox_profile })
+          }}
+        />
+      </details>
     </>
   )
 }
@@ -174,6 +195,11 @@ export function EffectiveDefaults({
         <dd>
           {sandboxLabel(effective.options.sandbox_profile)} ·{' '}
           {sourceLabel(effective.sources.sandbox_profile)}
+        </dd>
+        <dt>审批方式</dt>
+        <dd>
+          {effective.options.approval_mode === 'manual' ? '手动审批' : '智能审批'} ·{' '}
+          {sourceLabel(effective.sources.approval_mode)}
         </dd>
         <dt>默认模型</dt>
         <dd>

@@ -789,3 +789,57 @@ class BrowserService:
                 owned_resources_closed=True,
             )
         return await self._stop(session)
+
+    async def forget(self, owner: BrowserOwner, session_id: str, *, durable_closed=False):
+        from workbench.infrastructure.vault.private import private_directory
+        from workbench.modules.automation.forget import (
+            SessionForgotten,
+            remove_private_directory,
+            remove_session_files,
+        )
+
+        sid = str(UUID(str(session_id)))
+        async with self.create_lock:
+            session = self.sessions.get(sid)
+            if session is not None:
+                if session.owner != owner:
+                    raise error("browser_session_not_found", "浏览器会话归属不匹配。", 404)
+                async with session.stop_lock:
+                    if (
+                        not session.stopped
+                        or session.view.status not in {"stopped", "expired"}
+                        or session.lock.locked()
+                        or session.task
+                        and not session.task.done()
+                        or session.download_task
+                        and not session.download_task.done()
+                        or session.browser
+                        and session.browser.is_connected()
+                        or not session.proxy.closed
+                        or session.proxy.server
+                        and session.proxy.server.is_serving()
+                        or any(not task.done() for task in session.proxy.tasks)
+                    ):
+                        raise error("browser_forget_not_ready", "浏览器资源尚未关闭，不能清除。")
+                    remove_session_files(self.root, owner, sid, "browser")
+                    temporary = session.temporary_directory
+                    if temporary.exists() or temporary.is_symlink():
+                        if temporary.parent != Path("/tmp") or not temporary.name.startswith(
+                            "workbench-browser-"
+                        ):
+                            raise error("browser_forget_path_invalid", "会话临时目录归属无法确认。")
+                        private_directory(temporary)
+                        remove_private_directory(temporary)
+                    session.observation = None
+                    session.cache.clear()
+                    session.refs.clear()
+                    session.link_hrefs.clear()
+                    session.reader = None
+                    self.sessions.pop(sid)
+            else:
+                # GovernedBrowser validates the still-present durable row first.
+                if not durable_closed:
+                    raise error("browser_session_not_found", "浏览器会话归属未确认。", 404)
+                remove_session_files(self.root, owner, sid, "browser")
+            self.creates = {key: value for key, value in self.creates.items() if value[2] != sid}
+        return SessionForgotten(session_id=sid)
