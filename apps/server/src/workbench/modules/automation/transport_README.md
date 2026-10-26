@@ -6,7 +6,10 @@
 
 ```python
 from workbench.modules.automation.transport import (
-    bind_endpoint, client_endpoint, inspect_endpoint, release_dead_endpoint,
+    bind_endpoint,
+    client_endpoint,
+    inspect_endpoint,
+    release_dead_endpoint,
 )
 
 owned = bind_endpoint(data_dir, "browser", instance_id)
@@ -30,8 +33,11 @@ owned.close()
 ```python
 endpoint = client_endpoint(data_dir, "browser")
 async with httpx.AsyncClient(
-    transport=endpoint.transport, base_url=endpoint.base_url,
-    headers=endpoint.headers, trust_env=False, follow_redirects=False,
+    transport=endpoint.transport,
+    base_url=endpoint.base_url,
+    headers=endpoint.headers,
+    trust_env=False,
+    follow_redirects=False,
     timeout=70,
 ) as client:
     response = await client.get("/status")  # 实际业务路由由调用方提供
@@ -59,4 +65,4 @@ result = release_dead_endpoint(data_dir, "browser", expected_instance_id)
 
 2026-10-17实际Linux Python3.12、httpx0.28.1、psutil7.2.2、uvicorn0.54.0，自有最小诊断子进程验证通过：真实UDS/HTTP身份+token请求、无token403、Origin/Host/URL覆盖拒绝、metadata644拒绝、socket600、重复绑定拒绝、存活实例不得清理、POST停止后自有record/socket清理；另一个本轮子进程真实kill/回收后，错误instance保留、正确instance显式release成功；未知record保留。诊断只观测IPC事实，不伪造浏览器或桌面结果，临时目录均清理，无用户服务/模型/DB重启。
 
-Windows原生loopback/ACL与macOS UDS路径均代码已实现，**等待真实设备验证**。主 Launcher、客户端与 automation 服务已接入该私有传输；2026-10-18 主 agent 另已通过真实浏览器显式 README 下载与停止/资源闭合流程，见 browser 模块说明。这不将本次 IPC 机制检查变成产品验收，也不代表 Windows/macOS 或实际桌面输入通过；桌面输入仍等待诊断和真实操作结论。
+Windows原生loopback/ACL与macOS UDS路径均代码已实现，**等待真实设备验证**。主 Launcher、客户端与 automation 服务已接入该私有传输；2026-10-18 主 agent 另已通过真实浏览器显式 README 下载与停止/资源闭合流程，见[browser模块](../browser/README.md)。所选Linux/X11英文输入环境下的实际ASCII输入、接管和撤权也有独立[desktop证据与输入法限制](../desktop/README.md)。这些产品结果与本次IPC机制检查各有范围，不代表Windows/macOS或所有桌面输入组合均已通过。

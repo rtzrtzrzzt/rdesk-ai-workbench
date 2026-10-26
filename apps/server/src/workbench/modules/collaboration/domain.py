@@ -15,6 +15,12 @@ class AgentSlot(Entity, Base):
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class AgentTurn(Entity, Base):
+    __tablename__ = "agent_turns"
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agent_slots.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), unique=True)
+
+
 class AgentMessage(Entity, Base):
     __tablename__ = "agent_messages"
     root_run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
@@ -22,5 +28,7 @@ class AgentMessage(Entity, Base):
     to_run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
     operation_id: Mapped[str] = mapped_column(unique=True)
     source: Mapped[str] = mapped_column(default="agent")
+    kind: Mapped[str] = mapped_column(default="note", server_default="note")
+    reply_to_id: Mapped[str | None]
     content: Mapped[str]
     delivered_attempt_id: Mapped[str | None] = mapped_column(ForeignKey("attempts.id"))

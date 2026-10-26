@@ -2,6 +2,8 @@
 
 此模块使用现有 SQLAlchemy/psycopg/pwdlib、stdlib 和本地官方 PostgreSQL16 工具；备份/恢复服务不更改源数据库或角色权限，不启动模型/Worker。HTTP、全局静止 gate、停止与维护界面已由主入口接入，真实隔离恢复范围见末节；BYO 数据库不因此自动获得私有集群管理员能力。
 
+**当前schema039的限制：**`_facts`按`information_schema.columns`检查敏感列名，既有净化allowlist尚未包含`media_connections.encrypted_api_key`与`media_tasks.encrypted_credential`。因此只要数据库存在当前媒体表，本模块就会返回`backup_secret_schema_unsupported`，即使这些列全为空；不会跳过检查生成完整产品备份。下面2026-10-17–18的一致备份与隔离恢复是当时schema的历史证据，不能代表1.0.0全部扩展/媒体/协作数据已通过此产品迁移流程。后续阶段使用的完整PG运维归档与本模块净化备份属于不同流程；当前限制见[实现状态](../../../../../../docs/implementation-status.md)。
+
 ## 服务与DTO
 
 同步调用，HTTP应放入工作线程，Session不可与其他线程并发使用：
@@ -19,7 +21,7 @@ BackupCreate：request_id(UUID)、label(最多120字符)、timeout_seconds(60–
 
 QuiescenceBoundary内部字段：boundary_id、acquired_at、source_database、data_dir、backend_pid、SQLAlchemy connection、gate_check无参回调。不能从HTTP JSON创建这个对象。assert_held先执行回调，再查询同connection的pg_backend_pid/current_database/pg_locks，要求对应backend PID在对应库持有key82139705的ExclusiveLock。
 
-主入口的API写入与两Worker持同key shared gate；备份通过try exclusive取得边界，busy时失败，不排队堵住停止。create_backup验证对象绑定的源库/数据目录，且每个MiB、每个文件、PG子进程100ms轮询时重复assert_held+abort_check。abort_check返回truthy或抛异常会停止；统一gate marker也可立即使边界失效。连接及gate生命周期由调用方拥有，维护服务不释放、提交或关闭它。
+主入口的API写入与agent/file/media三类Worker持同key shared gate；备份通过try exclusive取得边界，busy时失败，不排队堵住停止。create_backup验证对象绑定的源库/数据目录，且每个MiB、每个文件、PG子进程100ms轮询时重复assert_held+abort_check。abort_check返回truthy或抛异常会停止；统一gate marker也可立即使边界失效。连接及gate生命周期由调用方拥有，维护服务不释放、提交或关闭它。
 
 此外拒绝运行/created Attempt、活跃Job租约、运行中Operation、已dispatch无回执交换、未确认closed的MCP retained transport、未收敛MD journal、非available artifact与publishing上传。原生automation session必须在closed状态且持真实owned_resources_closed（browser）或owned_inputs_released且无pending_native_call（desktop）回执；creating/active/stopping/outcome_unknown或仅到期而无关闭证据均拒绝，active action与未释放writer lease也拒绝。已静止且传输真实关闭的历史unknown/needs_reconciliation可以进入备份，source ids/status列入manifest.reconciliation_required，绝不改成成功。queued任务可以被静止，恢复后held。此判断不替代gate：只有所有应用写入入口已参加同一gate、外部effect已安全停点时才可开始。gate不冻结外部编辑器或提供OS快照；观察到复制期间/完成前文件改变会失败，但不承诺控制不参与gate的所有外部写入。
 
@@ -74,7 +76,7 @@ processes.json使用同目录600临时文件、fsync、replace与POSIX目录fsyn
 验证而非声称chmod等价，尚无真实Windows/macOS设备验收。
 
 `start`先检查现有严格process identity、API进程实际loopback listener、真实health、
-两Worker真实heartbeat与对应vault broker；全部健康就复用，不先ensure DB/migrate或
+agent/file/media三类Worker真实heartbeat与对应vault broker；五个应用组件全部健康就复用，不先ensure DB/migrate或
 争夺任务quiescence。存在无法完整确认的记录时保留并报告，不覆盖/自动重启现有任务。
 空state遇未核实归属的健康服务同样拒绝启动。新实例迁移先commit结束gate证明SELECT
 事务，再建checkpoint并发索引；session advisory gate仍保持，避免自身旧snapshot阻塞
@@ -82,7 +84,7 @@ CREATE INDEX CONCURRENTLY。browser-companion/desktop-companion尚未分派的CL
 明确失败，未假装启动或实现这两类组件。
 
 
-新增schema相容范围为146468c9210f（MCP/结构化Question）与8b71c5dc2b01
+2026-10-17当时新增schema相容范围为146468c9210f（MCP/结构化Question）与8b71c5dc2b01
 （automation政策/会话/动作/writer lease及jobs.completion_status）。
 automation_actions.session_id与desktop_writer_leases.session_id明确审核为FK历史source
 id，而非bearer/session凭据；只加入这两项allowlist，其余新增secret类字段仍拒绝。

@@ -97,13 +97,24 @@ def content(
     version: str | None = Query(default=None, pattern=r"^[a-f0-9]{64}$"),
 ):
     row, path = links.validated_artifact(db, user.id, str(workspace_id), str(artifact_id), version)
-    inline = not download and links.safe_inline_image(row)
+    playable = row.mime_type in {
+        "video/mp4",
+        "video/webm",
+        "audio/mpeg",
+        "audio/wav",
+        "audio/ogg",
+        "audio/flac",
+    }
+    inline = not download and (links.safe_inline_image(row) or playable)
     return FileResponse(
         path,
-        media_type="image/png" if inline else "application/octet-stream",
+        media_type=row.mime_type if inline else "application/octet-stream",
         filename=row.display_name,
         content_disposition_type="inline" if inline else "attachment",
-        headers={"Content-Security-Policy": "default-src 'none'; sandbox"},
+        headers={
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

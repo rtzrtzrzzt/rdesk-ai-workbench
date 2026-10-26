@@ -22,7 +22,7 @@ archive_bytes = service.export(engine, authenticated_user_id)
 
 - runtime：实际app/Python版本、平台族、架构桶和固定13个已安装distribution metadata版本。缺安装或不符合版本格式时unknown/unavailable。没有hostname、OS用户名、IP、CPU序列号、MAC、进程标识或原始uname；这不是硬件唯一指纹。
 - database：实际PostgreSQL版本、alembic_version（最多16个合法revision）、当前逻辑库pg_database_size、只读事务证明。只报告读到的revision，不声称与最新migration兼容或自动迁移。
-- queues：固定agent/files两队列，最新heartbeat、距采样时间秒数、30秒内heartbeat行数，以及owner jobs的固定状态桶计数。不存在heartbeat即unknown，不将历史心跳当进程探活；未来时间超前5秒则clock_skew。未知queue不导出，未知status并入other；不导出worker/run/workspace IDs。
+- queues：固定agent/files两队列，最新heartbeat、距采样时间秒数、30秒内heartbeat行数，以及owner jobs的固定状态桶计数。当前产品另有media Worker，但本诊断schema尚未将media纳入该固定队列投影，不能据此快照判定三类Worker全部健康。不存在heartbeat即unknown，不将历史心跳当进程探活；未来时间超前5秒则clock_skew。未知queue不导出，未知status并入other；不导出worker/run/workspace IDs。
 - recent_errors：24h内**记录创建时间**满足范围的runs.error/attempts.error，分别按created_at倒序最多200条，只在SQL投影error.code前80字符。不是故障发生时间轴；长任务创建超过24h后才发生的错误可能不在本快照，DTO window_basis=record_created_at明确此覆盖。仅固定代码白名单保留，其他并为other；不读error.message/reason、stack、Run.input、消息、日志或operation arguments。run/attempt是两个来源计数，不能相加当独立故障数；达到200即标采样边界，不伪称全量精确统计。
 - storage：只stat固定受管目录的表观字节与文件计数、data_dir所在卷fstatvfs实际total/free/available。不存在/不可访问目录保持null/unknown，不把未测当0。类别内表观字节不是实际唯一物理占用；稀疏文件、硬链接、压缩、目录元数据及文件活跃变化会造成差异，不能将类别和强行等同卷used。
 - models：owner模型连接引用数、恰好一个应用runtime/model/deployment.json中已有的已验证资产体积与engine版本。模型路径、名称、仓库标识、端点、revision及其他任意原文均不返回；本轮只导出引用计数/既有体积/engine版本，不打开或哈希权重，不扫描配置的外部模型/PLE路径，PLE占用明确not_measured。

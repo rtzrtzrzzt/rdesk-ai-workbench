@@ -10,6 +10,8 @@ class Thread(Entity, Base):
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     title: Mapped[str] = mapped_column(default="新对话")
+    title_source: Mapped[str] = mapped_column(default="legacy", server_default="legacy")
+    title_naming: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     archived: Mapped[bool] = mapped_column(default=False, server_default="false")
     deleting: Mapped[bool] = mapped_column(default=False, server_default="false")
     queue_paused: Mapped[bool] = mapped_column(default=False, server_default="false")

@@ -58,9 +58,9 @@ export function ToolsPage({
         <div>
           <Shield size={17} />
           <span>沙箱与执行策略</span>
-          <Status>配置入口尚未接通</Status>
+          <Status>在任务设置中调整</Status>
         </div>
-        <p>运行中的具体工具请求仍通过对话内的授权流程处理。</p>
+        <p>在设置的“任务偏好”“当前工作区”或发送消息时的本次任务设置中调整。实际工具操作继续按当前审批策略检查。</p>
       </section>
     </div>
   )

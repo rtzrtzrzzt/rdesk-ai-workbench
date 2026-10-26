@@ -16,7 +16,7 @@ def assert_resources_stopped(db: Session) -> None:
     # Run status is durable workflow state, not evidence of a live executor.
     # Keep held/queued/waiting runs intact; require the actual execution fences
     # and resource-close receipts instead. Unknown historical effects stay unknown.
-    for key in (82139702, 82139704):
+    for key in (82139702, 82139704, 82139709):
         if not db.scalar(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": key}):
             raise SystemExit("还有 Worker 持有执行所有权，请先停止，未修改账号。")
     busy = db.scalar(

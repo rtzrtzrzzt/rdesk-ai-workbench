@@ -7,7 +7,7 @@ import os
 import platform
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -17,6 +17,7 @@ from workbench.modules.browser.service import private_path
 from workbench.modules.desktop.dto import (
     DesktopAction,
     DesktopActionResult,
+    DesktopBounds,
     DesktopCapability,
     DesktopCreate,
     DesktopFeature,
@@ -33,6 +34,21 @@ from workbench.modules.desktop.native import choose_driver, failure
 
 def now():
     return datetime.now(UTC)
+
+
+def snapshot(driver, grant):
+    state = driver.snapshot()
+    if not grant.all_windows or not state.displays:
+        return state
+    # A global grant covers the visible desktop, including other windows and
+    # the taskbar. Keep foreground identity in the observation/geometry fence.
+    left = min(display.bounds.x for display in state.displays)
+    top = min(display.bounds.y for display in state.displays)
+    right = max(display.bounds.x + display.bounds.width for display in state.displays)
+    bottom = max(display.bounds.y + display.bounds.height for display in state.displays)
+    return replace(
+        state, bounds=DesktopBounds(x=left, y=top, width=right - left, height=bottom - top)
+    )
 
 
 def utc(value):
@@ -240,9 +256,13 @@ class DesktopService:
         state = await asyncio.wait_for(asyncio.to_thread(driver.snapshot), 3)
         if command.target_window_id != grant.target_window_id:
             raise failure("desktop_grant_scope", "会话窗口与用户授权目标不同。", "permission")
-        if command.target_window_id and (
-            state.window_id != command.target_window_id
-            or state.window_pid != grant.target_window_pid
+        if (
+            not grant.all_windows
+            and command.target_window_id
+            and (
+                state.window_id != command.target_window_id
+                or state.window_pid != grant.target_window_pid
+            )
         ):
             raise failure(
                 "desktop_target_changed", "被授权窗口/PID已变化，不能切换到当前窗口。", "conflict"
@@ -261,8 +281,12 @@ class DesktopService:
                     "permission",
                 )
             if (
-                not command.target_window_id
-                or not grant.target_window_pid
+                (
+                    not grant.all_windows
+                    and (not command.target_window_id or not grant.target_window_pid)
+                )
+                or not state.window_id
+                or not state.window_pid
                 or state.locked is not False
                 or not driver.input_supported
             ):
@@ -294,10 +318,14 @@ class DesktopService:
 
     def _capture(self, session, command):
         driver = self._driver()
-        before = driver.snapshot()
-        if session.grant.target_window_id and (
-            before.window_id != session.grant.target_window_id
-            or before.window_pid != session.grant.target_window_pid
+        before = snapshot(driver, session.grant)
+        if (
+            not session.grant.all_windows
+            and session.grant.target_window_id
+            and (
+                before.window_id != session.grant.target_window_id
+                or before.window_pid != session.grant.target_window_pid
+            )
         ):
             raise failure(
                 "desktop_target_changed", "授权窗口已不在前台；不会激活或切换窗口。", "conflict"
@@ -315,7 +343,7 @@ class DesktopService:
         content = encoded.getvalue()
         if len(content) > 16 * 1024 * 1024:
             raise failure("desktop_capture_budget", "PNG截图超过16MiB预算。", "budget")
-        after = driver.snapshot()
+        after = snapshot(driver, session.grant)
         if before.geometry() != after.geometry() or before.locked != after.locked:
             raise failure(
                 "desktop_observation_changed",
@@ -464,7 +492,7 @@ class DesktopService:
                 self.assert_lease(owner, session.view, lease)
                 if pointer is not None:
                     expected_pointer[0] = pointer
-                current = driver.snapshot()
+                current = snapshot(driver, session.grant)
                 if current.locked is not False or current.geometry() != state.geometry():
                     raise failure(
                         "desktop_observation_stale",
@@ -501,7 +529,7 @@ class DesktopService:
                         "动作必须绑定当前原始截图和几何代数。",
                         "conflict",
                     )
-                if (
+                if not session.grant.all_windows and (
                     command.target_window_id != session.grant.target_window_id
                     or state.window_pid != session.grant.target_window_pid
                 ):

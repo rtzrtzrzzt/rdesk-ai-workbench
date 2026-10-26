@@ -492,6 +492,8 @@ def _write(
     operation: str,
     payload: dict,
     prepare: Callable,
+    *,
+    before_publish=None,
 ):
     request_id = str(UUID(request_id))
     digest = hashlib.sha256(
@@ -580,7 +582,12 @@ def _write(
                 # Commit the intent before target publication; keep the session lock held.
             target_phase_complete = False
             try:
-                files.publish(journal.plan)
+                if before_publish:
+                    with owned.begin():
+                        before_publish(owned)
+                        files.publish(journal.plan)
+                else:
+                    files.publish(journal.plan)
                 target_phase_complete = True
                 with owned.begin():
                     journal.status = "published"
@@ -857,9 +864,16 @@ def get_global_rules(db, user_id, workspace_id) -> dto.GlobalRules:
 
 
 def update_global_rules(
-    db, user_id, workspace_id, command: dto.GlobalRulesUpdate
+    db,
+    user_id,
+    workspace_id,
+    command: dto.GlobalRulesUpdate,
+    *,
+    before_publish=None,
 ) -> dto.GlobalRules:
     def prepare(owned, scope, journal):
+        if before_publish:
+            before_publish(owned)
         path = f"users/{user_id}/AGENTS.md"
         _check_version(path, command.expected_version)
         if "\0" in command.body:
@@ -891,6 +905,7 @@ def update_global_rules(
         "global_rules",
         command.model_dump(mode="json"),
         prepare,
+        before_publish=before_publish,
     )
 
 

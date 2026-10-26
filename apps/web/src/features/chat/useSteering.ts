@@ -1,7 +1,5 @@
 import { useRef, useState } from 'react'
 import { api } from '../../api/workbench'
-import { useQuery } from '@tanstack/react-query'
-import { conversationsApi } from '../../api/conversations'
 import { ApiError, authGeneration } from '../../api/client'
 import type { SteerRun } from '../../api/types'
 
@@ -11,12 +9,6 @@ const empty: Entry = { draft: '', pending: null, busy: false, notice: '' }
 /** Drafts and uncertain submissions belong to a Run, even when the user switches chats. */
 export function useSteering(runId: string | undefined, onRefresh: () => Promise<void>) {
   const [entries, setEntries] = useState<Record<string, Entry>>({})
-  const deliveries = useQuery({
-    queryKey: ['steering-inputs', runId],
-    queryFn: () => conversationsApi.inputs(runId!),
-    enabled: !!runId,
-    refetchInterval: 3000,
-  })
   const forgotten = useRef(new Set<string>())
   const inFlight = useRef(new Set<string>())
   const entry = (runId && entries[runId]) || empty
@@ -32,13 +24,12 @@ export function useSteering(runId: string | undefined, onRefresh: () => Promise<
     inFlight.current.add(id)
     patch(id, { pending: command, busy: true, notice: '' })
     try {
-      const received = await api.steer(id, command)
+      await api.steer(id, command)
       patch(id, {
         pending: null,
         draft: '',
-        notice: received.status === 'delivered' ? '补充要求已生效。' : '补充要求已接收。',
+        notice: '',
       })
-      await deliveries.refetch()
       await onRefresh().catch(() =>
         patch(id, { notice: '补充要求已收到；任务状态暂时未刷新，可稍后重新读取。' }),
       )
@@ -60,8 +51,6 @@ export function useSteering(runId: string | undefined, onRefresh: () => Promise<
   }
   return {
     ...entry,
-    deliveries: deliveries.data ?? [],
-    deliveryError: deliveries.error,
     value: entry.pending?.input ?? entry.draft,
     change: (draft: string) => {
       if (runId && !entry.pending && !entry.busy) patch(runId, { draft, notice: '' })

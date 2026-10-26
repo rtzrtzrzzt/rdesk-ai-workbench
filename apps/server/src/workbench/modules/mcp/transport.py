@@ -173,7 +173,24 @@ class SessionLease:
                             with anyio.fail_after(min(c.call_timeout_seconds, timeout)):
                                 if method == "list_tools":
                                     result = await self.client.session.list_tools(**kwargs)
-                                else:
+                                elif method == "list_resources":
+                                    result = await self.client.session.list_resources(**kwargs)
+                                elif method == "list_resource_templates":
+                                    result = await self.client.session.list_resource_templates(
+                                        **kwargs
+                                    )
+                                elif method == "read_resource":
+                                    result = await self.client.session.send_request(
+                                        protocol.ReadResourceRequest(
+                                            params=protocol.ReadResourceRequestParams(**kwargs)
+                                        ),
+                                        TypeAdapter(
+                                            protocol.ReadResourceResult
+                                            | protocol.InputRequiredResult
+                                        ),
+                                        request_read_timeout_seconds=c.call_timeout_seconds,
+                                    )
+                                elif method == "call_tool":
                                     # call_tool validates output before returning, losing
                                     # a malformed business response to the ledger. The
                                     # public typed send_request keeps that response for
@@ -187,6 +204,8 @@ class SessionLease:
                                         ),
                                         request_read_timeout_seconds=c.call_timeout_seconds,
                                     )
+                                else:
+                                    raise TransportUnavailable("Unsupported owned MCP method")
                             if not future.done():
                                 future.set_result(result)
                         except BaseException as error:

@@ -2,6 +2,7 @@ import type { components, paths } from './schema'
 export type ActivityItem = components['schemas']['ActivityItem']
 export type ActivityPage = components['schemas']['ActivityPage']
 export type ActivityDetails = components['schemas']['ActivityDetails']
+export type QueueSteered = components['schemas']['QueueSteered']
 
 export type Identity = components['schemas']['OwnerSession']
 export type SetupStatus = components['schemas']['SetupStatus']

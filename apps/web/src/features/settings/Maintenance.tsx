@@ -111,7 +111,7 @@ function Manifest({ manifest }: { manifest: BackupManifest }) {
           {text}
         </p>
       ))}
-      <details className="run-json">
+      <details className="run-json" open>
         <summary>完整服务端清单与校验值</summary>
         <pre>{JSON.stringify(manifest, null, 2)}</pre>
       </details>

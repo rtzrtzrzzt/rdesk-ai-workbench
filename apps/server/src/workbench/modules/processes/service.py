@@ -6,7 +6,7 @@ import json
 import os
 from uuid import UUID, uuid4, uuid5
 
-from sqlalchemy import and_, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 from workbench.config import PROJECT_ROOT, get_settings
 from workbench.contracts.errors import AppError
@@ -42,6 +42,10 @@ def view(row):
         finished_at=receipt.get("finished_at"),
         log_artifacts=row.log_artifacts,
         sandbox=row.sandbox_profile,
+        interactive=receipt.get("interactive", False),
+        stderr_merged=receipt.get("stderr_merged", False),
+        terminal_rows=receipt.get("terminal_rows"),
+        terminal_columns=receipt.get("terminal_columns"),
         error=row.error,
         created_at=row.created_at,
     )
@@ -76,6 +80,85 @@ def listing(db, user_id, workspace_id):
     ]
 
 
+def _capacity(db, run_id):
+    settings = get_settings()
+    busy = list(
+        db.scalars(
+            select(CommandExecution)
+            .where(CommandExecution.resources_closed.is_(False))
+            .order_by(CommandExecution.created_at, CommandExecution.id)
+        )
+    )
+    own = [row for row in busy if row.run_id == run_id]
+    per_run, total = settings.command_max_active_per_run, settings.command_max_active_total
+    return {
+        "limits": {"per_run": per_run, "total": total},
+        "occupied": {
+            "run": len(own),
+            "total": len(busy),
+            "outside_run": len(busy) - len(own),
+            "unknown_run": sum(row.status == "outcome_unknown" for row in own),
+            "unknown_total": sum(row.status == "outcome_unknown" for row in busy),
+        },
+        "available": max(0, min(per_run - len(own), total - len(busy))),
+        # Other tasks may belong to another user/workspace. Only expose their count.
+        "commands": [
+            {
+                "command_id": row.id,
+                "status": row.status,
+                "command_preview": row.command[:160],
+                "preview_truncated": len(row.command) > 160,
+                "stop_requested": row.stop_requested,
+                "owned_resources_closed": False,
+                "interactive": bool((row.receipt or {}).get("interactive", False)),
+                "timeout_seconds": row.timeout_seconds,
+                "error": row.error,
+                "supervisor_observation": (row.receipt or {}).get("supervisor_observation"),
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in own
+        ],
+        "unknown_resources_occupy_slots": True,
+        "next_steps": [
+            "用read_command_output及原command_id继续查看日志；next_offset是续读游标。",
+            "交互终端需要输入时复用write_command_input；不再需要的本任务命令用stop_command停止。",
+            "未知状态不能直接清除；须核对真实资源关闭回执。",
+            "本任务以外的命令仅计数，不得代替其他任务停止；可先处理其他工作，稍后重新查询。",
+        ],
+    }
+
+
+def _refresh_capacity():
+    """Reclaim only proven closures, without stopping or publishing another task's logs."""
+    with Session(engine()) as db:
+        identifiers = list(
+            db.scalars(
+                select(CommandExecution.id)
+                .where(CommandExecution.resources_closed.is_(False))
+                .order_by(CommandExecution.created_at)
+            )
+        )
+    for identifier in identifiers:
+        try:
+            reconcile(identifier, observation_only=True)
+        except (AppError, OSError, ValueError, RuntimeError):
+            pass  # Missing or untrusted receipts continue to occupy their slots.
+
+
+async def active_commands(user_id, workspace_id, run_id):
+    def inspect_capacity():
+        with Session(engine()) as db:
+            workspace(db, user_id, workspace_id)
+            run = db.get(Run, run_id)
+            if run is None or run.user_id != user_id or run.workspace_id != workspace_id:
+                raise AppError("run_not_found", "任务不属于当前工作区。", 404)
+        _refresh_capacity()
+        with Session(engine()) as db:
+            return _capacity(db, run_id)
+
+    return await asyncio.to_thread(inspect_capacity)
+
+
 def _reserve(run_id, operation_id, values):
     from workbench.modules.processes import native
 
@@ -101,6 +184,9 @@ def _reserve(run_id, operation_id, values):
             or approval.status != "approved"
             or not approval.approved
             or approval.parameters_digest != argument_digest(operation.arguments)
+            or operation.arguments.get("command") != values["command"]
+            or operation.arguments.get("timeout_seconds") != values["timeout_seconds"]
+            or operation.arguments.get("interactive", False) != values.get("interactive", False)
         ):
             raise AppError("command_approval_required", "此命令尚无参数一致的有效批准。", 403)
         existing = db.get(CommandExecution, operation_id)
@@ -109,18 +195,28 @@ def _reserve(run_id, operation_id, values):
         profile = run.config_snapshot.get("runtime_options", {}).get(
             "sandbox_profile", "native_scoped"
         )
+        if values.get("interactive", False) and profile != "native_scoped":
+            raise AppError(
+                "terminal_sandbox_unsupported",
+                "当前沙箱未实现交互终端；未降低沙箱级别。",
+                409,
+                "capability",
+            )
         isolation = provider_for(profile).capability()
         if isolation.status != "ready":
             raise AppError("sandbox_unavailable", isolation.reason, 409, "capability")
         db.execute(text("SELECT pg_advisory_xact_lock(82139715)"))
-        busy = list(
-            db.scalars(select(CommandExecution).where(CommandExecution.resources_closed.is_(False)))
-        )
-        if len(busy) >= 2 or any(row.run_id == run_id for row in busy):
+        capacity = _capacity(db, run_id)
+        if not capacity["available"]:
+            limits, occupied = capacity["limits"], capacity["occupied"]
             raise AppError(
                 "command_capacity",
-                "每任务最多一个活动长命令，本机最多两个；未知资源仍占名额。",
+                f"活动命令名额已满：本任务{occupied['run']}/{limits['per_run']}，"
+                f"本机{occupied['total']}/{limits['total']}。本次命令尚未启动；"
+                "请先用list_commands查看占位，复用原命令或等待资源关闭，不要立即反复启动。",
                 409,
+                retryable=True,
+                details={**capacity, "not_started": True},
             )
         argv = (
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", values["command"]]
@@ -184,6 +280,11 @@ def _dispatch(identifier):
                 str(PROJECT_ROOT / "models"),
             ],
         }
+        # The approved Operation is the durable source for this optional mode;
+        # old operations/plans remain noninteractive without a schema migration.
+        operation = db.get(Operation, row.operation_id)
+        if operation.arguments.get("interactive", False):
+            plan["interactive"] = True
         plan_path = output / "plan.json"
         if plan_path.exists():
             raise AppError(
@@ -207,7 +308,15 @@ def _dispatch(identifier):
 
 
 async def start(run_id, operation_id, values):
-    identifier, fresh = await asyncio.to_thread(_reserve, run_id, operation_id, values)
+    try:
+        identifier, fresh = await asyncio.to_thread(_reserve, run_id, operation_id, values)
+    except AppError as error:
+        if error.code != "command_capacity":
+            raise
+        # The periodic janitor may not yet have consumed a just-finished receipt.
+        # Refresh outside the admission transaction to preserve run lock ordering.
+        await asyncio.to_thread(_refresh_capacity)
+        identifier, fresh = await asyncio.to_thread(_reserve, run_id, operation_id, values)
     if fresh:
         try:
             return await asyncio.to_thread(_dispatch, identifier)
@@ -215,6 +324,88 @@ async def start(run_id, operation_id, values):
             await asyncio.shield(asyncio.to_thread(_request_id_stop, identifier))
             raise
     return await asyncio.to_thread(reconcile, identifier)
+
+
+def _write_input(run_id, operation_id, values):
+    from workbench.modules.processes import native, terminal
+    from workbench.modules.tools.service import argument_digest
+
+    with Session(engine()) as db, db.begin():
+        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        assert_owned(db, run_id)
+        if run.parent_run_id or run.cancel_requested_at or run.status != "running":
+            raise AppError("terminal_run_inactive", "仅当前根任务可向自己的活动终端输入。", 409)
+        row = db.get(CommandExecution, str(values["command_id"]), with_for_update=True)
+        if row is None or row.run_id != run_id:
+            raise AppError("command_not_found", "命令不属于当前任务。", 404)
+        operation = db.get(Operation, operation_id, with_for_update=True)
+        approval = db.scalar(
+            select(Approval).where(Approval.operation_id == operation_id).with_for_update()
+        )
+        if (
+            operation is None
+            or operation.run_id != run_id
+            or operation.tool_name != "write_command_input"
+            or operation.status != "running"
+            or approval is None
+            or approval.run_id != run_id
+            or approval.tool_name != "write_command_input"
+            or approval.status != "approved"
+            or not approval.approved
+            or approval.parameters_digest != argument_digest(operation.arguments)
+            or str(operation.arguments.get("command_id")) != str(values["command_id"])
+            or operation.arguments.get("data", "") != values.get("data", "")
+            or operation.arguments.get("eof", False) != values.get("eof", False)
+        ):
+            raise AppError("command_approval_required", "终端输入尚无参数一致的有效批准。", 403)
+        if row.stop_requested or row.resources_closed or row.status != "running":
+            raise AppError("terminal_closed", "命令已结束、停止或状态未知，不能继续输入。", 409)
+        try:
+            state = native.read_state(storage_path(row.output_path))
+            if (
+                state.get("nonce") != row.nonce
+                or state.get("supervisor_identity") != row.native_identity
+                or not state.get("interactive", False)
+            ):
+                raise native.RunnerError("Interactive terminal identity mismatch.")
+            receipt = terminal.submit(
+                storage_path(row.output_path),
+                str(operation_id),
+                values.get("data", ""),
+                values.get("eof", False),
+            )
+        except (OSError, ValueError, native.RunnerError) as error:
+            raise AppError(
+                "terminal_input_unavailable",
+                "终端输入未确认；不得重发相同内容，请核对原操作回执。",
+                409,
+                "outcome_unknown",
+            ) from error
+        if receipt["status"] == "outcome_unknown":
+            raise AppError(
+                "terminal_input_unknown",
+                "终端可能已收到输入；请核对日志，不得再次发送相同内容。",
+                409,
+                "outcome_unknown",
+            )
+        # Keep nonce/private details inside the execution ledger.
+        return {
+            "command_id": row.id,
+            "operation_id": str(operation_id),
+            "status": receipt["status"],
+            "bytes_written": receipt.get("bytes_written"),
+            "eof": values.get("eof", False),
+            "stderr_merged": True,
+            "terminal_rows": 24,
+            "terminal_columns": 80,
+            "reason": receipt.get("reason"),
+            "outcome_note": "输入回执仅证明写入终端，不证明命令业务成功。",
+        }
+
+
+async def write_input(run_id, operation_id, values):
+    """ToolExecutor calls this only after the ordinary independent approval path."""
+    return await asyncio.to_thread(_write_input, run_id, operation_id, values)
 
 
 async def execute_bounded(run_id, operation_id, values):
@@ -225,7 +416,7 @@ async def execute_bounded(run_id, operation_id, values):
             if command.status == "outcome_unknown":
                 raise AppError(
                     "command_outcome_unknown",
-                    "命令归属尚未确认；不会重放，资源记录继续保留。",
+                    "命令执行结果或资源关闭状态尚未确认；不会重放，日志和资源记录继续保留。",
                     409,
                     "outcome_unknown",
                 )
@@ -298,6 +489,42 @@ def cleanup_pending(db, run_id):
     )
 
 
+def abandoned_command_condition():
+    """A dead supervisor cannot resume cleanup; its missing closure stays unknown."""
+    receipt = CommandExecution.receipt
+    return func.coalesce(
+        and_(
+            CommandExecution.status == "outcome_unknown",
+            func.coalesce(CommandExecution.error["code"].astext != "command_receipt_unknown", True),
+            receipt["status"].astext == "outcome_unknown",
+            receipt["command_id"].astext == CommandExecution.id,
+            receipt["nonce"].astext == CommandExecution.nonce,
+            receipt["supervisor_identity"] == CommandExecution.native_identity,
+            receipt["supervisor_observation"].astext == "gone",
+            receipt["owned_resources_closed"].astext == "false",
+            receipt["finished_at"].astext.is_not(None),
+        ),
+        False,
+    )
+
+
+def cleanup_unconfirmed(db, run_id):
+    if not cleanup_pending(db, run_id):
+        return False
+    return (
+        db.scalar(
+            select(CommandExecution.id)
+            .where(
+                CommandExecution.run_id == run_id,
+                CommandExecution.resources_closed.is_(False),
+                ~abandoned_command_condition(),
+            )
+            .limit(1)
+        )
+        is None
+    )
+
+
 def _publish_logs(identifier):
     with Session(engine()) as db:
         row = db.get(CommandExecution, identifier)
@@ -365,7 +592,33 @@ def _publish_logs(identifier):
         db.get(CommandExecution, identifier, with_for_update=True).log_artifacts = references
 
 
-def reconcile(identifier):
+def _save_reboot_closure(identifier, proof):
+    with Session(engine()) as db, db.begin():
+        reference = db.get(CommandExecution, identifier)
+        db.scalar(select(Run).where(Run.id == reference.run_id).with_for_update())
+        row = db.get(CommandExecution, identifier, with_for_update=True)
+        if row.resources_closed:
+            return view(row)
+        if row.id != proof["command_id"] or row.nonce != proof["nonce"]:
+            raise AppError("command_receipt_unknown", "重启核对身份已变化，未释放资源记录。", 409)
+        receipt = dict(row.receipt or {})
+        receipt["resource_reconciliation"] = {
+            **proof,
+            "observed_at": now().isoformat(),
+            "original_status": row.status,
+            "original_resources_closed": receipt.get("owned_resources_closed"),
+        }
+        receipt["owned_resources_closed"] = True
+        row.receipt, row.resources_closed, row.status = receipt, True, "outcome_unknown"
+        row.error = {
+            "code": "command_resources_released_after_reboot",
+            "message": "系统重启已确认旧进程资源释放；原命令执行结果仍未知，原回执与日志已保留。",
+        }
+        return view(row)
+
+
+def reconcile_after_reboot(identifier, *, legacy_prior_boot_id=None):
+    """Legacy attribution is operator-only; never exposed as a model tool or inferred."""
     from workbench.modules.processes import native
 
     with write_gate():
@@ -373,7 +626,31 @@ def reconcile(identifier):
             row = db.get(CommandExecution, identifier)
             if row is None:
                 raise AppError("command_not_found", "命令不存在。", 404)
-            if row.resources_closed and (row.log_artifacts or not row.receipt):
+            if row.resources_closed:
+                return view(row)
+            proof = native.reboot_closure_proof(
+                storage_path(row.output_path),
+                row.nonce,
+                legacy_prior_boot_id=legacy_prior_boot_id,
+                expected_identity=row.native_identity,
+            )
+        return _save_reboot_closure(identifier, proof) if proof else None
+
+
+def reconcile(identifier, *, observation_only=False):
+    from workbench.modules.processes import native
+
+    with write_gate():
+        with Session(engine()) as db:
+            row = db.get(CommandExecution, identifier)
+            if row is None:
+                raise AppError("command_not_found", "命令不存在。", 404)
+            reboot_closed = ((row.receipt or {}).get("resource_reconciliation") or {}).get(
+                "method"
+            ) == "host_reboot"
+            if row.resources_closed and (
+                reboot_closed or observation_only or row.log_artifacts or not row.receipt
+            ):
                 return view(row)
             publish_closed = row.resources_closed
             output, expected, stopping, nonce = (
@@ -388,6 +665,12 @@ def reconcile(identifier):
             _publish_logs(identifier)
             with Session(engine()) as db:
                 return view(db.get(CommandExecution, identifier))
+        try:
+            reboot_proof = native.reboot_closure_proof(output, nonce)
+        except (OSError, ValueError, native.RunnerError):
+            reboot_proof = None
+        if reboot_proof:
+            return _save_reboot_closure(identifier, reboot_proof)
         if not (output / "state.json").is_file():
             if stopping and status == "reserved":
                 with Session(engine()) as db, db.begin():
@@ -415,7 +698,7 @@ def reconcile(identifier):
             or (expected is not None and identity != expected)
         ):
             return _unknown(identifier, "命令执行器身份未确认，未发送信号。")
-        if stopping:
+        if stopping and not observation_only:
             result = native.stop(output, expected_identity=identity)
             state = result.state
         if state is None:
@@ -433,7 +716,7 @@ def reconcile(identifier):
                 row.resources_closed = state.get("owned_resources_closed") is True
                 row.error = state.get("error")
             publish = row.resources_closed and len(row.log_artifacts) != 2
-        if publish:
+        if publish and not observation_only:
             _publish_logs(identifier)
         with Session(engine()) as db:
             return view(db.get(CommandExecution, identifier))
@@ -519,6 +802,9 @@ async def serve_cleanup(stop_event):
                             and_(
                                 CommandExecution.receipt["status"].astext.is_not(None),
                                 CommandExecution.log_artifacts == {},
+                                CommandExecution.receipt["resource_reconciliation"][
+                                    "method"
+                                ].astext.is_(None),
                             ),
                         )
                     )

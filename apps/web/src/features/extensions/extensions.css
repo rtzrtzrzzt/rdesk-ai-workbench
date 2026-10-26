@@ -1,0 +1,141 @@
+.extensions-page,
+.extension-installations,
+.extension-package-contents {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+.extension-page-actions {
+  justify-content: flex-end;
+}
+.extension-installation {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.extension-installation-heading,
+.extension-component-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.extension-installation h3,
+.extension-inspection h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.extension-description {
+  margin: 14px 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.extension-installation-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px 22px;
+  margin: 16px 0;
+}
+.extension-installation-actions > .button-row {
+  margin-left: auto;
+}
+.extension-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.extension-details[open] > summary {
+  margin-bottom: 16px;
+}
+.extension-components {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.extension-components > li {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.extension-components strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.extension-components p,
+.extension-diagnostics li {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+.extension-package-contents h4 {
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+.extension-diagnostics {
+  border-left: 2px solid var(--warn);
+  padding-left: 14px;
+}
+.extension-diagnostics ul {
+  padding-left: 18px;
+  margin: 0;
+}
+.extension-source-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 16px;
+  font-size: 12px;
+}
+.extension-source-details dt {
+  color: var(--muted);
+}
+.extension-source-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.extension-inspection,
+.extension-pending {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.extension-inspection > p {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.extension-pending {
+  background: var(--sidebar);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.extension-request-id,
+.extension-source-revision {
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.extension-install-form > .button {
+  width: fit-content;
+}
+@media (max-width: 560px) {
+  .extension-installation {
+    padding: 14px;
+  }
+  .extension-installation-heading,
+  .extension-component-heading {
+    flex-wrap: wrap;
+  }
+  .extension-installation-actions > .button-row {
+    width: 100%;
+    margin-left: 0;
+  }
+  .extension-source-details {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .extension-source-details dd {
+    margin-bottom: 8px;
+  }
+}

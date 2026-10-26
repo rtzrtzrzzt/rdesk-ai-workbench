@@ -176,8 +176,14 @@ def status():
     }
 
 
-def start():
-    prepare()
+def start(*, existing_only=False):
+    if existing_only:
+        if not all(
+            path.exists() for path in (PYTHON, SRC / "searx", CONFIG, ENV / "prepared-revision.txt")
+        ):
+            raise RuntimeError("SearXNG is not prepared; explicitly run searxng.py prepare first.")
+    else:
+        prepare()
     if owned_process():
         return status()
     # Never take over or terminate an unrelated listener.
@@ -262,7 +268,7 @@ def stop():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=["prepare", "start", "ensure", "stop", "status", "doctor"]
+        "command", choices=["prepare", "start", "ensure", "resume", "stop", "status", "doctor"]
     )
     command = parser.parse_args().command
     if command in {"status", "doctor"}:
@@ -276,6 +282,8 @@ def main():
             result = status()
         elif command == "stop":
             result = stop()
+        elif command == "resume":
+            result = start(existing_only=True)
         else:
             result = start()
         print(json.dumps(result))

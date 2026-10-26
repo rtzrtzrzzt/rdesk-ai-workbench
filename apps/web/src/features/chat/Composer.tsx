@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { ArrowUp, Paperclip, Square } from 'lucide-react'
 import { IconButton } from '../../components/ui'
+import { SlashCommands, type ComposerCommand } from './SlashCommands'
 
 export function Composer({
   value,
@@ -26,10 +27,14 @@ export function Composer({
   options,
   reasoningControl,
   controls,
+  contextControl,
+  commands = [],
 }: {
   options?: ReactNode
   reasoningControl?: ReactNode
   controls?: ReactNode
+  contextControl?: ReactNode
+  commands?: ComposerCommand[]
   modelDisabled?: boolean
   readOnly?: boolean
   sendLabel?: string
@@ -53,6 +58,33 @@ export function Composer({
   const composing = useRef(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
+  const [commandIndex, setCommandIndex] = useState(0)
+  const [dismissed, setDismissed] = useState<string | null>(null)
+  const commandId = useId()
+  const query = /^\/([^\s/]*)$/.exec(value)?.[1]?.toLocaleLowerCase()
+  const commandMenu = query !== undefined && commands.length > 0 && dismissed !== value && !readOnly
+  const matches = commands.filter((command) =>
+    [command.name, ...command.aliases, command.description].some((term) =>
+      term.toLocaleLowerCase().includes(query ?? ''),
+    ),
+  )
+  const selectedIndex = Math.min(commandIndex, Math.max(0, matches.length - 1))
+  const selected = matches[selectedIndex]
+  function execute(command: ComposerCommand) {
+    if (readOnly || sending || command.disabledReason) return
+    onChange('')
+    setCommandIndex(0)
+    setDismissed(null)
+    command.run()
+  }
+  function submit() {
+    if (commandMenu) {
+      if (selected) execute(selected)
+    } else if (!disabledReason && !sending && !readOnly && value.trim()) onSend()
+  }
+  const blocked = commandMenu
+    ? (selected?.disabledReason ?? (!selected ? '没有匹配的命令' : undefined))
+    : disabledReason
   return (
     <div
       className={`composer-wrap${dragging ? ' composer-dragging' : ''}`}
@@ -76,6 +108,15 @@ export function Composer({
       {controls}
       {attachmentSummary}
       <div className="composer">
+        {commandMenu && (
+          <SlashCommands
+            id={commandId}
+            commands={matches}
+            selected={selectedIndex}
+            onSelect={execute}
+            onHighlight={setCommandIndex}
+          />
+        )}
         <textarea
           aria-label="消息"
           placeholder={placeholder}
@@ -83,7 +124,16 @@ export function Composer({
           readOnly={readOnly}
           maxLength={1048576}
           rows={3}
-          onChange={(event) => onChange(event.target.value)}
+          aria-controls={commandMenu ? commandId : undefined}
+          aria-activedescendant={
+            commandMenu && selected ? `${commandId}-${selectedIndex}` : undefined
+          }
+          aria-autocomplete={commands.length ? 'list' : undefined}
+          onChange={(event) => {
+            setCommandIndex(0)
+            setDismissed(null)
+            onChange(event.target.value)
+          }}
           onPaste={(event) => {
             if (event.clipboardData.files.length && onFiles && !attachmentsDisabled) {
               event.preventDefault()
@@ -97,6 +147,22 @@ export function Composer({
             composing.current = false
           }}
           onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing || composing.current) return
+            if (commandMenu && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+              event.preventDefault()
+              if (matches.length)
+                setCommandIndex(
+                  (selectedIndex + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) %
+                    matches.length,
+                )
+              return
+            }
+            if (commandMenu && event.key === 'Escape') {
+              event.preventDefault()
+              event.stopPropagation()
+              setDismissed(value)
+              return
+            }
             if (
               event.key === 'Enter' &&
               !event.shiftKey &&
@@ -104,7 +170,7 @@ export function Composer({
               !composing.current
             ) {
               event.preventDefault()
-              if (!disabledReason && !sending && !readOnly && value.trim()) onSend()
+              submit()
             }
           }}
         />
@@ -169,13 +235,20 @@ export function Composer({
                 <Square size={14} fill="currentColor" />
               </button>
             )}
+            {contextControl}
             <button
               className="send-button"
               type="button"
-              disabled={!!disabledReason || readOnly || sending || !value.trim()}
-              aria-label={sending ? '正在发送' : sendLabel}
-              title={disabledReason ?? sendLabel}
-              onClick={onSend}
+              disabled={!!blocked || readOnly || sending || !value.trim()}
+              aria-label={
+                sending
+                  ? '正在发送'
+                  : commandMenu && selected
+                    ? `执行命令：${selected.name}`
+                    : sendLabel
+              }
+              title={blocked ?? (commandMenu && selected ? `/${selected.name}` : sendLabel)}
+              onClick={submit}
             >
               <ArrowUp size={19} />
             </button>

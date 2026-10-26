@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import Field
 from sqlalchemy import or_, select, tuple_
@@ -9,10 +10,26 @@ from sqlalchemy import or_, select, tuple_
 from workbench.contracts.base import PublicResponse
 from workbench.contracts.errors import AppError
 from workbench.modules.conversation_service import get_thread, history_rows
-from workbench.modules.runs.domain import Run
+from workbench.modules.media.domain import MediaTask, run_id_for_request
+from workbench.modules.runs.domain import Attempt, Run, RunEvent
 from workbench.modules.tools.domain import Operation
 
 TITLES = {
+    "read_rules": "阅读规则",
+    "read_workbench_guide": "阅读工作台说明",
+    "list_skills": "查看技能",
+    "read_skill": "阅读技能",
+    "prepare_skill": "准备技能文件",
+    "inspect_agent_models": "查看子任务模型",
+    "inspect_media": "查看生成模型",
+    "read_media_guide": "准备生成要求",
+    "generate_image": "提交生图任务",
+    "generate_video": "提交视频任务",
+    "generate_audio": "提交音频任务",
+    "generate_3d": "提交3D任务",
+    "media_task_status": "查看生成进度",
+    "cancel_media_task": "停止生成",
+    "view_media_output": "查看生成内容",
     "discover_tools": "准备工具",
     "web_search": "搜索网页",
     "read_webpage": "阅读网页",
@@ -33,9 +50,13 @@ TITLES = {
     "cancel_agent": "停止子任务",
     "release_agent": "结束子任务协作",
     "read_task_history": "查阅任务记录",
+    "list_conversations": "浏览其它对话",
+    "search_conversations": "搜索其它对话",
+    "read_conversation": "阅读其它对话",
     "ask_user": "等待你的回答",
     "exec_command": "执行命令",
     "start_command": "启动命令",
+    "list_commands": "查看活动命令",
     "read_command_output": "查看执行结果",
     "stop_command": "停止命令",
     "memory_search": "查找记忆",
@@ -67,11 +88,14 @@ class ActivityItem(PublicResponse):
     effect_status: str
     error: str | None
     created_at: datetime
+    details_available: bool = True
+    media_run_id: str | None = None
 
 
 class ActivityPage(PublicResponse):
     items: list[ActivityItem]
     next_before: str | None
+    preparing: list[ActivityItem] = Field(default_factory=list)
 
 
 class ActivityDetails(PublicResponse):
@@ -94,7 +118,7 @@ def visible_operations(db, user_id, thread_id):
     return select(Operation).where(or_(Operation.run_id.in_(own_runs), Operation.id.in_(inherited)))
 
 
-def activity_view(row):
+def activity_view(row, media_run_id=None):
     summary = ""
     keys = {
         "web_search": "query",
@@ -125,6 +149,29 @@ def activity_view(row):
         if not superseded and isinstance(error, dict) and isinstance(error.get("message"), str)
         else None,
         "created_at": row.created_at,
+        "media_run_id": media_run_id,
+    }
+
+
+def media_associations(db, user_id, rows):
+    # Media creation uses the Operation ID as its request ID. Checking the real
+    # child also covers a restart between its commit and the tool-result commit.
+    candidates = {
+        run_id_for_request(UUID(row.id)): row
+        for row in rows
+        if row.tool_name in {"generate_image", "generate_video", "generate_audio", "generate_3d"}
+    }
+    if not candidates:
+        return {}
+    children = db.execute(
+        select(Run.id, Run.parent_run_id)
+        .join(MediaTask, MediaTask.run_id == Run.id)
+        .where(Run.id.in_(candidates), Run.user_id == user_id, Run.kind == "media")
+    )
+    return {
+        candidates[identifier].id: identifier
+        for identifier, parent_id in children
+        if parent_id == candidates[identifier].run_id
     }
 
 
@@ -143,10 +190,47 @@ def page(db, user_id, thread_id, before=None, limit=100):
         )
     )
     selected = rows[:limit]
+    media = media_associations(db, user_id, selected)
     return {
-        "items": [activity_view(row) for row in reversed(selected)],
+        "items": [activity_view(row, media.get(row.id)) for row in reversed(selected)],
         "next_before": selected[-1].id if len(rows) > limit else None,
+        "preparing": preparing(db, user_id, thread_id) if before is None else [],
     }
+
+
+def preparing(db, user_id, thread_id):
+    # These are observations of an in-flight model stream, never executable
+    # Operations. Attempt state clears them on finish, retry, steer and recovery;
+    # separate live items leave historical pagination and branch prefixes intact.
+    events = db.scalars(
+        select(RunEvent)
+        .join(Attempt, RunEvent.payload["attempt_id"].astext == Attempt.id)
+        .join(Run, Attempt.run_id == Run.id)
+        .where(
+            Run.thread_id == thread_id,
+            Run.user_id == user_id,
+            Run.status.not_in(["succeeded", "failed", "cancelled", "cancelling", "held", "paused"]),
+            Run.cancel_requested_at.is_(None),
+            Attempt.status == "running",
+            RunEvent.run_id == Run.id,
+            RunEvent.type == "tool.preparing",
+        )
+        .order_by(RunEvent.seq)
+    )
+    return [
+        {
+            "id": event.id,
+            "run_id": event.run_id,
+            "title": TITLES.get(event.payload.get("name"), "使用工具"),
+            "summary": "",
+            "status": "preparing",
+            "effect_status": "not_started",
+            "error": None,
+            "created_at": event.created_at,
+            "details_available": False,
+        }
+        for event in events
+    ]
 
 
 def details(db, user_id, thread_id, operation_id):

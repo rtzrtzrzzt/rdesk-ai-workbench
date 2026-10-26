@@ -18,7 +18,7 @@ export function RuntimeDefaults({ models }: { models: ModelConnection[] }) {
     conflict || query.isError || (!!message && !!editing),
     '用户任务默认设置需要核对',
   )
-  const [editorOpen, setEditorOpen] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(true)
   useEffect(() => {
     if (conflict) setEditorOpen(true)
   }, [conflict])

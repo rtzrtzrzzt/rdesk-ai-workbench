@@ -59,6 +59,12 @@ def memory_fingerprint(db, run):
             )
         ),
     ]
+    if run.config_snapshot.get("extensions"):
+        from workbench.modules.extensions.service import skill_catalog
+
+        values.append([
+            (item["skill_id"], item["revision_id"]) for item in skill_catalog(db, run)
+        ])
     return hashlib.sha256(json.dumps(values, default=list).encode()).hexdigest()
 
 

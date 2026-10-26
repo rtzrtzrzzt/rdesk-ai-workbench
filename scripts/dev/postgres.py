@@ -606,7 +606,12 @@ def main():
     parser.add_argument(
         "--port", type=int, help="new data-root instance only; existing port cannot change"
     )
+    parser.add_argument(
+        "--legacy", action="store_true", help="explicitly resume this checkout's existing cluster"
+    )
     args = parser.parse_args()
+    if args.legacy and (args.action != "resume" or args.data_dir is not None):
+        parser.error("--legacy is only valid for resume without --data-dir")
     if args.port is not None and args.data_dir is None:
         parser.error("--port requires explicit --data-dir; legacy port is never changed")
     if args.data_dir is not None:
@@ -629,7 +634,7 @@ def main():
         elif args.action in ("start", "ensure"):
             start()
         elif args.action == "resume":
-            if args.data_dir is None:
+            if args.data_dir is None and not args.legacy:
                 raise RuntimeError("Resume requires an explicitly registered managed data root.")
             start(existing_only=True)
         elif args.action == "stop":

@@ -37,6 +37,8 @@ REQUIRED = (
     "alembic.ini",
     "start.sh",
     "start.ps1",
+    "stop.sh",
+    "stop.ps1",
     "apps/web/package.json",
     "apps/web/package-lock.json",
     "apps/web/index.html",

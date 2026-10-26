@@ -65,14 +65,18 @@ from workbench.entrypoints.dependencies import authenticate as _authenticate
 from workbench.entrypoints.routes.account import router as account_router
 from workbench.entrypoints.routes.analytics import router as analytics_router
 from workbench.entrypoints.routes.automation import router as automation_router
+from workbench.entrypoints.routes.automation import settings_router as automation_settings_router
 from workbench.entrypoints.routes.collaboration import router as collaboration_router
+from workbench.entrypoints.routes.configuration import router as configuration_router
 from workbench.entrypoints.routes.conversations import router as conversations_router
 from workbench.entrypoints.routes.credentials import router as credentials_router
 from workbench.entrypoints.routes.diagnostics import router as diagnostics_router
+from workbench.entrypoints.routes.extensions import router as extensions_router
 from workbench.entrypoints.routes.files import router as files_router
 from workbench.entrypoints.routes.generated import router as generated_router
 from workbench.entrypoints.routes.maintenance import router as maintenance_router
 from workbench.entrypoints.routes.mcp import router as mcp_router
+from workbench.entrypoints.routes.media import router as media_router
 from workbench.entrypoints.routes.memory import router as memory_router
 from workbench.entrypoints.routes.preferences import router as preferences_router
 from workbench.entrypoints.routes.processes import router as processes_router
@@ -83,9 +87,10 @@ from workbench.infrastructure.http_limits import BodyLimitMiddleware
 from workbench.infrastructure.mutations import write_gate
 from workbench.infrastructure.secrets import csrf_token
 from workbench.modules import conversation_service, identity_service, workspace_service
-from workbench.modules.collaboration.dto import InputReceived
+from workbench.modules.collaboration.dto import AgentView, InputReceived
 from workbench.modules.context.dto import ContextView
 from workbench.modules.conversation_dto import DeletionView, EditedThread, QueueItem, QueueView
+from workbench.modules.conversation_history.dto import ConversationHistoryView
 from workbench.modules.files.inputs import ArtifactInputPlan, input_plan
 from workbench.modules.identity import User
 from workbench.modules.models import service as model_service
@@ -166,7 +171,9 @@ async def security_and_trace(request: Request, call_next):
                 raise AppError("invalid_origin", "请求来源不受允许。", 403, "policy")
             if not request.url.path.startswith("/api/v1/maintenance/"):
                 gate = write_gate(
-                    interrupt_maintenance=request.url.path.endswith(("/cancel", "/stop"))
+                    interrupt_maintenance=request.url.path.endswith(
+                        ("/cancel", "/stop", "/interrupt")
+                    )
                 )
                 await asyncio.to_thread(gate.__enter__)
         response = await call_next(request)
@@ -353,7 +360,13 @@ def threads(workspace_id: UUID, db: DB, user: USER):
 
 @api.post("/workspaces/{workspace_id}/threads", status_code=201, response_model=Thread)
 def create_thread(workspace_id: UUID, command: ThreadCreate, db: DB, user: USER):
-    result = conversation_service.create_thread(db, user.id, str(workspace_id), command.title)
+    result = conversation_service.create_thread(
+        db,
+        user.id,
+        str(workspace_id),
+        command.title,
+        explicit_title="title" in command.model_fields_set,
+    )
     db.commit()
     return result
 
@@ -535,6 +548,8 @@ def decide_approval(approval_id: UUID, command: ApprovalDecision, db: DB, user: 
     | EditedThread
     | DeletionView
     | InputReceived
+    | AgentView
+    | ConversationHistoryView
     | ContextView,
     response_model_exclude_unset=True,
 )
@@ -767,14 +782,18 @@ app.openapi = _contract_openapi
 app.include_router(api)
 app.include_router(account_router)
 app.include_router(automation_router)
+app.include_router(automation_settings_router)
 app.include_router(memory_router)
 app.include_router(mcp_router)
 app.include_router(files_router)
+app.include_router(extensions_router)
+app.include_router(media_router)
 app.include_router(generated_router)
 app.include_router(search_router)
 app.include_router(analytics_router)
 app.include_router(collaboration_router)
 app.include_router(conversations_router)
+app.include_router(configuration_router)
 app.include_router(credentials_router)
 app.include_router(maintenance_router)
 app.include_router(diagnostics_router)

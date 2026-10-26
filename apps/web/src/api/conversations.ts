@@ -8,6 +8,7 @@ import type {
   RunCreate,
   Thread,
   SteeringDelivery,
+  QueueSteered,
 } from './types'
 const post = (body: unknown) => ({ method: 'POST', body: JSON.stringify(body) })
 const root = (id: string) => `/threads/${encodeURIComponent(id)}`
@@ -26,6 +27,11 @@ export const conversationsApi = {
     ),
   resumeQueue: (id: string, request_id: string) =>
     request<QueueView>(`${root(id)}/queue/resume`, post({ request_id })),
+  steerQueue: (id: string, item: QueueItem, run_id: string, request_id: string) =>
+    request<QueueSteered>(
+      `${root(id)}/queue/${encodeURIComponent(item.id)}/steer`,
+      post({ version: item.version, run_id, request_id }),
+    ),
   rename: (thread: Thread, title: string, request_id: string) =>
     request<Thread>(
       `${root(thread.id)}/configuration`,

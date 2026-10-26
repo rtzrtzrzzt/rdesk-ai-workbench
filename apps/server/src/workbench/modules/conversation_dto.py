@@ -41,6 +41,7 @@ class QueueItem(PublicResponse):
     run_id: str | None
     error: RunError | None
     created_at: datetime
+    has_attachments: bool = False
 
 
 class QueueView(PublicResponse):
@@ -55,6 +56,18 @@ class QueueUpdate(Command):
     input: str | None = Field(default=None, min_length=1, max_length=1048576)
     position: int | None = Field(default=None, ge=0)
     remove: bool = False
+
+
+class QueueSteer(Command):
+    version: int = Field(ge=1)
+    request_id: UUID
+    run_id: UUID
+
+
+class QueueSteered(PublicResponse):
+    queue: QueueView
+    run_id: str
+    input_id: str
 
 
 class ResumeRun(Command):

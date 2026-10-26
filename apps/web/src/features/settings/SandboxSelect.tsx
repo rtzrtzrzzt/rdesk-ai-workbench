@@ -72,7 +72,7 @@ export function SandboxSelect({
       </label>
       <small>创建新任务时冻结；不可用时不会自动改用其他执行配置。</small>
       {query.data?.map((capability) => (
-        <details key={capability.provider} className="sandbox-capability">
+        <details key={capability.provider} className="sandbox-capability" open>
           <summary>
             {sandboxLabels[capability.provider]} ·{' '}
             {capability.status === 'ready'

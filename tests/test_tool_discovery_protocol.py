@@ -58,6 +58,26 @@ def test_catalog_does_not_change_loaded_tools(discovery_state):
     assert run.config_snapshot["tool_names"] == before
 
 
+def test_targeted_discovery_loads_the_advertised_tool_for_next_request(discovery_state):
+    run, _ = discovery_state
+    result = extensions.discover("protocol-run", [], query="read_notebook")
+    assert result["auto_loaded"] == ["read_notebook"]
+    assert "read_notebook" in result["loaded"]
+    assert run.config_snapshot["tool_names"] == result["loaded"]
+    repeated = extensions.discover("protocol-run", [], query="read_notebook")
+    assert repeated["auto_loaded"] == []
+    assert "read_notebook" in repeated["loaded"]
+
+
+def test_targeted_discovery_bounds_loading_and_skips_unavailable_search(discovery_state):
+    _, connection = discovery_state
+    result = extensions.discover("protocol-run", [], module="filesystem", limit=100)
+    assert 0 < len(result["auto_loaded"]) <= 6
+    connection.enabled = False
+    result = extensions.discover("protocol-run", [], module="search")
+    assert result["auto_loaded"] == []
+
+
 def test_discovery_respects_allowed_tools_and_search_enabled(discovery_state):
     run, connection = discovery_state
     run.config_snapshot["allowed_tools"] = ["discover_tools", "read_task_history"]

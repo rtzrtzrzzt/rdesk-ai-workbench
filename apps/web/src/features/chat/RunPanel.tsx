@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, RefreshCw } from 'lucide-react'
 import { api } from '../../api/workbench'
 import { conversationsApi } from '../../api/conversations'
+import { collaborationApi } from '../../api/collaboration'
 import type { AgentView, Run, RunTrace } from '../../api/types'
 import { Button, Status } from '../../components/ui'
 import { Dialog } from '../../components/Dialog'
@@ -13,6 +14,12 @@ import { MessageContent } from './MessageContent'
 import { StateArtifact } from './StateArtifact'
 import { RunSurfaces } from '../generated/RunSurfaces'
 import { CommandsPanel } from './CommandsPanel'
+const planLabels: Record<string, string> = {
+  pending: '待处理',
+  in_progress: '进行中',
+  completed: '已完成',
+  skipped: '已跳过',
+}
 function ReadError({ error, retry }: { error: unknown; retry: () => void }) {
   return (
     <div role="alert" className="run-read-error">
@@ -99,17 +106,19 @@ function TraceContent({ trace }: { trace: RunTrace }) {
 }
 function ChildAgent({
   agent,
+  rootId,
+  root,
   workspaceId,
   onRefresh,
 }: {
   agent: AgentView
+  rootId: string
+  root: Run | undefined
   workspaceId: string
   onRefresh: () => Promise<void>
 }) {
   const [open, setOpen] = useState(false)
-  const [cancelling, setCancelling] = useState(false)
-  const [error, setError] = useState('')
-  const cancelId = useRef<string | null>(null)
+  const rootActive = !!root && acceptsInput(root.status)
   const trace = useQuery({
     queryKey: ['run-trace', agent.run.id],
     queryFn: () => api.trace(agent.run.id),
@@ -126,7 +135,11 @@ function ChildAgent({
       >
         <strong>{agent.name}</strong>
         <Status tone={agent.run.status === 'failed' ? 'warning' : 'neutral'}>
-          {runStatusLabel(agent.run)}
+          {agent.state === 'closed'
+            ? '已关闭'
+            : agent.state === 'stopping'
+              ? '正在停止'
+              : runStatusLabel(agent.run)}
         </Status>
         <span>
           查看对话 <ChevronDown size={13} />
@@ -138,9 +151,21 @@ function ChildAgent({
           className="agent-dialog"
           onClose={() => setOpen(false)}
         >
-          <SubagentTranscript agent={agent} workspaceId={workspaceId} />
-          {agent.run.status === 'paused' && <PausedChild run={agent.run} onRefresh={onRefresh} />}
-          <RunInteractions run={agent.run} onRefresh={onRefresh} />
+          <SubagentTranscript agent={agent} rootId={rootId} workspaceId={workspaceId} />
+          {agent.run.status === 'paused' && agent.state !== 'closed' && (
+            <PausedChild
+              run={agent.run}
+              onRefresh={onRefresh}
+              disabled={!rootActive || agent.state === 'stopping'}
+            />
+          )}
+          <RunInteractions run={agent.run} onRefresh={onRefresh} pendingOnly />
+          <AgentControls
+            agent={agent}
+            rootId={rootId}
+            rootActive={rootActive}
+            onRefresh={onRefresh}
+          />
           <details className="agent-technical">
             <summary>高级信息与执行记录</summary>
             <dl className="run-meta">
@@ -182,30 +207,6 @@ function ChildAgent({
               <MessageContent content={agent.result} workspaceId={workspaceId} />
             )}
           </details>
-          <div className="button-row">
-            {!runTerminal.has(agent.run.status) && (
-              <Button
-                disabled={cancelling || agent.run.status === 'cancelling'}
-                onClick={() => {
-                  setCancelling(true)
-                  setError('')
-                  cancelId.current ??= crypto.randomUUID()
-                  void api
-                    .cancelRun(agent.run.id, cancelId.current)
-                    .then(onRefresh)
-                    .catch((e) => setError(e instanceof Error ? e.message : '停止请求未确认'))
-                    .finally(() => setCancelling(false))
-                }}
-              >
-                {cancelling ? '正在请求停止…' : '停止此 Agent'}
-              </Button>
-            )}
-          </div>
-          {error && (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          )}
           <details className="agent-technical">
             <summary>调试追溯</summary>
             {trace.isError ? (
@@ -222,12 +223,141 @@ function ChildAgent({
   )
 }
 
-function PausedChild({ run, onRefresh }: { run: Run; onRefresh: () => Promise<void> }) {
+function AgentControls({
+  agent,
+  rootId,
+  rootActive,
+  onRefresh,
+}: {
+  agent: AgentView
+  rootId: string
+  rootActive: boolean
+  onRefresh: () => Promise<void>
+}) {
+  const [input, setInput] = useState('')
+  const [action, setAction] = useState<'followup' | 'interrupt' | 'close' | null>(null)
+  const [error, setError] = useState('')
+  const [interruptedRunId, setInterruptedRunId] = useState<string | null>(null)
+  const pending = useRef<{ key: string; id: string } | null>(null)
+  const terminal = runTerminal.has(agent.run.status)
+  const closed = agent.state === 'closed'
+  const stopping =
+    agent.state === 'stopping' ||
+    agent.run.status === 'cancelling' ||
+    agent.run.activity === 'cleanup_unconfirmed' ||
+    (interruptedRunId === agent.run.id && !['idle', 'closed'].includes(agent.state))
+  const childPaused = ['paused', 'held'].includes(agent.run.status)
+  const canFollowup = rootActive && !closed && !stopping && !childPaused
+  async function submit(next: 'followup' | 'interrupt' | 'close') {
+    if (action) return
+    if (next === 'followup' && (!canFollowup || !input.trim())) return
+    if (next === 'interrupt' && (terminal || closed || stopping)) return
+    if (next === 'close' && (!terminal || closed || stopping || agent.state !== 'idle')) return
+    const text = input.trim()
+    // A successful followup can advance run.id before its HTTP reply arrives.
+    // Retry the same intent with its original ID across that background refresh.
+    const key = `${next}:${next === 'followup' ? text : ''}`
+    if (pending.current?.key !== key) pending.current = { key, id: crypto.randomUUID() }
+    setAction(next)
+    setError('')
+    try {
+      if (next === 'followup') {
+        await collaborationApi.followup(rootId, agent.agent_id, pending.current.id, text)
+        setInput('')
+      } else if (next === 'interrupt') {
+        await collaborationApi.interrupt(rootId, agent.agent_id, pending.current.id)
+        setInterruptedRunId(agent.run.id)
+      } else {
+        await collaborationApi.close(rootId, agent.agent_id, pending.current.id)
+      }
+      pending.current = null
+      await onRefresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '操作未确认，请重试。')
+    } finally {
+      setAction(null)
+    }
+  }
+  return (
+    <div className="agent-controls">
+      {!closed && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            void submit('followup')
+          }}
+        >
+          <label htmlFor={`agent-followup-${agent.agent_id}`}>补充任务要求</label>
+          <textarea
+            id={`agent-followup-${agent.agent_id}`}
+            value={input}
+            rows={3}
+            disabled={!canFollowup || !!action}
+            onChange={(event) => setInput(event.target.value)}
+            placeholder={terminal ? '继续此子任务，保留之前的上下文…' : '向此子任务补充要求…'}
+          />
+          <div className="button-row">
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!canFollowup || !!action || !input.trim()}
+            >
+              {action === 'followup' ? '正在发送…' : terminal ? '继续此子任务' : '发送补充要求'}
+            </Button>
+            {!terminal && (
+              <Button disabled={!!action || stopping} onClick={() => void submit('interrupt')}>
+                {action === 'interrupt' ? '正在请求中断…' : '中断本轮'}
+              </Button>
+            )}
+            {terminal && (
+              <Button
+                disabled={!!action || stopping || agent.state !== 'idle'}
+                onClick={() => void submit('close')}
+              >
+                {action === 'close' ? '正在关闭…' : '关闭此子任务'}
+              </Button>
+            )}
+          </div>
+        </form>
+      )}
+      <p className="page-note" role="status">
+        {closed
+          ? '此子任务已关闭，对话记录已保留。'
+          : agent.run.activity === 'cleanup_unconfirmed'
+            ? '本轮已中止，资源仍待核对；核对完成后才能继续。'
+            : stopping
+              ? '正在停止本轮并清理资源，完成后可继续。'
+              : !rootActive
+                ? '主任务已结束或暂停，当前不能发送补充任务。'
+                : childPaused
+                  ? '此子任务已暂停，请先处理暂停原因并明确继续。'
+                  : terminal
+                    ? '继续将开始新一轮；关闭后将保留记录并结束此子任务。'
+                    : '补充要求将在本轮处理，中断本轮后可继续协作。'}
+      </p>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function PausedChild({
+  run,
+  onRefresh,
+  disabled,
+}: {
+  run: Run
+  onRefresh: () => Promise<void>
+  disabled: boolean
+}) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const pending = useRef<{ extend: boolean; id: string } | null>(null)
   async function resume(extend: boolean) {
-    if (busy) return
+    if (busy || disabled) return
     if (!pending.current || pending.current.extend !== extend)
       pending.current = { extend, id: crypto.randomUUID() }
     setBusy(true)
@@ -247,7 +377,7 @@ function PausedChild({ run, onRefresh }: { run: Run; onRefresh: () => Promise<vo
       <strong>子任务已暂停</strong>
       <p>{run.paused_reason?.message}</p>
       <div className="button-row">
-        <Button disabled={busy} onClick={() => void resume(false)}>
+        <Button disabled={busy || disabled} onClick={() => void resume(false)}>
           {['repeated_tool_call', 'no_progress'].includes(run.paused_reason?.code ?? '')
             ? '重新规划并继续此 Agent'
             : '继续此 Agent'}
@@ -255,7 +385,7 @@ function PausedChild({ run, onRefresh }: { run: Run; onRefresh: () => Promise<vo
         {['round_limit', 'root_model_budget', 'model_output_limit'].includes(
           run.paused_reason?.code ?? '',
         ) && (
-          <Button disabled={busy} onClick={() => void resume(true)}>
+          <Button disabled={busy || disabled} onClick={() => void resume(true)}>
             {run.paused_reason?.code === 'model_output_limit'
               ? '使用剩余上下文并继续'
               : '扩展此 Agent 预算并继续'}
@@ -317,7 +447,11 @@ export function RunPanel({ run, workspaceId }: { run: Run; workspaceId: string }
   const tree = useQuery({
     queryKey: ['run-agents', rootId],
     queryFn: () => api.agents(rootId),
-    refetchInterval: !runTerminal.has(run.status) && run.status !== 'held' ? 4000 : false,
+    refetchInterval: (query) => {
+      const current = query.state.data?.root ?? run
+      if (query.state.data?.agents.some((agent) => agent.state === 'stopping')) return 2500
+      return !runTerminal.has(current.status) && current.status !== 'held' ? 4000 : false
+    },
   })
   const root = tree.data?.root ?? (rootId === run.id ? run : undefined)
   async function refresh() {
@@ -327,6 +461,7 @@ export function RunPanel({ run, workspaceId }: { run: Run; workspaceId: string }
       client.invalidateQueries({ queryKey: ['run-surfaces'] }),
       client.invalidateQueries({ queryKey: ['runs'] }),
       client.invalidateQueries({ queryKey: ['messages'] }),
+      client.invalidateQueries({ queryKey: ['agent-messages', rootId] }),
     ])
   }
   async function resume(extend: boolean) {
@@ -384,6 +519,21 @@ export function RunPanel({ run, workspaceId }: { run: Run; workspaceId: string }
           恢复的任务已暂停，历史确认保持只读。可停止此任务后继续新消息。
         </p>
       )}
+      {root?.plan && Array.isArray(root.plan.steps) && root.plan.steps.length > 0 && (
+        <details className="run-plan" open>
+          <summary>任务计划</summary>
+          <ol>
+            {(root.plan.steps as { id: string; step: string; status: string }[]).map((item) => (
+              <li key={item.id}>
+                <Status tone={item.status === 'completed' ? 'good' : 'neutral'}>
+                  {planLabels[item.status] ?? item.status}
+                </Status>{' '}
+                {item.step}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
       {!!tree.data?.agents.length && (
         <div className="agent-entries" aria-label="子任务">
           <p className="agent-entries-label">
@@ -394,6 +544,8 @@ export function RunPanel({ run, workspaceId }: { run: Run; workspaceId: string }
             <ChildAgent
               key={agent.agent_id}
               agent={agent}
+              rootId={rootId}
+              root={root}
               workspaceId={workspaceId}
               onRefresh={refresh}
             />
@@ -401,7 +553,7 @@ export function RunPanel({ run, workspaceId }: { run: Run; workspaceId: string }
         </div>
       )}
       {root && <RunSurfaces run={root} workspaceId={workspaceId} active />}
-      {root && <RunInteractions run={root} onRefresh={refresh} />}
+      {root && <RunInteractions run={root} onRefresh={refresh} pendingOnly />}
       {tree.isError && <ReadError error={tree.error} retry={() => void tree.refetch()} />}
       {tree.data?.agents
         .filter(

@@ -150,6 +150,8 @@ class HostGate:
             )
         with Session(engine()) as db:
             row = db.get(MCPConnection, config.connection_id)
+            from workbench.modules.extensions.service import binding_allowed
+
             if (
                 row is None
                 or identity(row) != identity_ref
@@ -157,6 +159,7 @@ class HostGate:
                 or not row.execution_authorized
                 or not row.configuration.get("enabled")
                 or row.configuration != config.model_dump(mode="json")
+                or not binding_allowed(db, row.user_id, row.workspace_id, row.id)
             ):
                 raise AppError("mcp_grant_revoked", "MCP授权或连接配置已经失效。", 403, "policy")
 
@@ -186,7 +189,7 @@ def configuration(user_id, workspace_id, connection_id, expected_version=None):
         return ConnectionConfig.model_validate(row.configuration), identity(row)
 
 
-async def discover(user_id, workspace_id, connection_id, command):
+async def discover(user_id, workspace_id, connection_id, command, *, before_publish=None):
     def reserve():
         fresh = False
 
@@ -243,6 +246,8 @@ async def discover(user_id, workspace_id, connection_id, command):
         # cannot publish a directory but leave its request looking unperformed.
         result = {"id": snapshot.snapshot_id, "snapshot": snapshot.model_dump(mode="json")}
         with Session(engine()) as db, db.begin():
+            if before_publish:
+                before_publish(db)
             row = get_connection(db, user_id, workspace_id, connection_id, lock=True)
             if identity(row) != identity_ref:
                 raise AppError("mcp_version_conflict", "发现期间配置已改变，请重新发现。", 409)

@@ -2,6 +2,8 @@
 
 本文件是内部实体标识、Run 状态、事件信封和通用 API 的权威规格。总体边界见[架构](../architecture.md)，工具的专用结果和重试见[工具与恢复](tools-and-recovery.md)。设计约束与当前实现须区分：本章主要 HTTP 路径已按生成的 OpenAPI 校准，完整类型以 `apps/web/openapi.json` 为准；当前实机范围见[状态清单](../implementation-status.md)。
 
+1.0.0 当前实现已覆盖持久任务、主子agent双向通信和同一身份多轮续办；数据库当前为039。当前工具和设置操作见[AI说明书](../ai-guide.md)，协作真实证据见[状态第21节](../implementation-status.md#21-2026-10-25-主子-agent-双向多轮协作)，跨对话读取及最新接口边界见[第22节](../implementation-status.md#22-2026-10-26-跨对话读取与-ai-操作说明)。下文逻辑实体和故障窗口保留设计约束，不等于每项已逐一真实验收。
+
 ## 1. 先区分六个概念
 
 - **Workspace，工作区**：一组项目目录、设置、记忆和会话的资源边界。
@@ -156,11 +158,13 @@ LangGraph 的中断恢复可能重新进入节点，因此中断前代码必须�
 
 ### 5.3 子 agent 名额
 
-创建流程在同一事务中检查 root_run_id 的未释放名额数、深度及权限，预留名额、创建子 Run 和入队。最多 3 个名额；queued、running、waiting_* 和 cancelling 的子 Run 都占名额。终态且清理完成后释放，未知残留资源单独保留隔离记录。
+创建流程在同一事务中检查 root_run_id 的未释放名额数、深度及权限，预留AgentSlot、创建子Run/AgentTurn并入队。最多3个未释放身份，深度1；完成或中断一轮不会自动释放身份。`followup_agent`可在活动轮补充指令，或待上一轮终态及资源核实后，在同一Thread创建新Run并保留旧轮记录。`release_agent`显式关闭身份且先核对资源、租约和未知操作，未知资源不能通过续办或关闭绕过；身份不跨新的根Run复用。
 
 不在 Python 进程内用一个列表充当全局名额表；多个 Worker 同时创建时必须由数据库约束和事务串行化这一资源判断。
 
 子 agent 继承的是父级权限的子集和明确目标，独立消耗预算但同时受根任务总预算约束。主任务等待时不占模型生成许可，也不把 Worker 执行线程锁在阻塞式等待函数中。
+
+主子消息以`note/question/reply/instruction`及内部完成通知持久保存，子任务以`parent`寻址父任务，不开放兄弟通信、派生或控制。普通消息不会为已完成agent自动开启新轮，回复关联真实`reply_to_id`。消息和完成通知可唤醒LangGraph的持久等待；等待释放Worker及模型许可，超时只报告真实状态，不代表收到答复。
 
 ### 5.4 资源许可与死锁避免
 
@@ -172,7 +176,7 @@ LangGraph 的中断恢复可能重新进入节点，因此中断前代码必须�
 
 ## 6. 数据模型
 
-下表列出逻辑概念及关键约束，不是当前物理表清单。实际使用迁移和 ORM：配置为 runtime_defaults/workspace_runtime_defaults/model_revisions；能力、消息内容块、价格快照及文件处理计划嵌入各自 JSON 字段；每个 artifact 行本身有不可变版本；并未机械建立 settings_revisions、message_parts、artifact_versions、price_revisions、outbox 等独立表。每张可归属业务表都必须具备归属字段，必要时用复合外键保证父子对象属于同一工作区。
+下表列出逻辑概念及关键约束，不是当前物理表清单。实际使用迁移和 ORM：配置主要为 runtime_defaults/workspace_runtime_defaults/model_revisions，账户偏好与对话范围使用configuration_states；能力、消息内容块、价格快照及文件处理计划嵌入各自 JSON 字段；每个 artifact 行本身有不可变版本；并未机械建立 settings_revisions、message_parts、artifact_versions、price_revisions、outbox 等独立表。每张可归属业务表都必须具备归属字段，必要时用复合外键保证父子对象属于同一工作区。
 
 | 逻辑表 / 记录 | 核心内容与约束 | 所有者模块 |
 | --- | --- | --- |
@@ -186,7 +190,7 @@ LangGraph 的中断恢复可能重新进入节点，因此中断前代码必须�
 | run_steps、attempts | 步骤目标、每次执行状态、起止时间、错误、用量引用 | Runs |
 | client_requests | 主体 + request_id 唯一、请求摘要、对应资源、响应状态；响应清理后保留最小去重记录 | Runs / 通用命令入口 |
 | jobs、resource_leases | 持久队列、领取版本、续租、调度信息 | Scheduler |
-| agent_slots | root_run_id、子 Run、预留与释放；上限由事务维护 | Collaboration |
+| agent_slots、agent_turns、agent_messages | 根Run内稳定身份、当前与历次子Run、双向通信、回复/送达关联和显式释放；上限由事务维护 | Collaboration |
 | tool_calls、operations、tool_exchanges | 工具版本、参数、权限、幂等/副作用、结果；多轮协议交换独立记录 | Tools |
 | questions | interaction_key 唯一、问题版本、选项、内嵌的唯一有效答案 | Interaction |
 | approvals | 动作范围、参数指纹、授权主体、期限、接受状态 | Policy / Interaction |
@@ -356,7 +360,7 @@ TanStack Query 维护查询，React hooks 管理布局、草稿和流状态。�
 
 客户端可显示“正在提交”，只有收到后端事实才显示“已接受”。待答问题和精确授权始终可达；内部步骤、原始 JSON、版本和调试记录默认收起。
 
-普通聊天按持久时间混排模型进度正文、工具状态与最终答复；工具的名称、简短目标和状态直接可见，结果可展开，原始参数再折叠。可见思考默认折叠，点击显示提供方实际返回的文字。活动独立分页，用户分支只包含所选历史实际引用的工具，不引入源会话分支点之后的操作。子 agent 由 Run 的父子关联识别，普通侧栏不列为新会话；主任务中的子任务入口打开独立只读对话面板，使用子 Run 自己的状态和 SSE，不改变当前主会话。
+普通聊天按持久时间混排模型进度正文、工具状态与最终答复；工具的名称、简短目标和状态直接可见，结果可展开，原始参数再折叠。可见思考默认折叠，点击显示提供方实际返回的文字。活动独立分页，用户分支只包含所选历史实际引用的工具，不引入源会话分支点之后的操作。子 agent 由 Run 的父子关联识别，普通侧栏不列为新会话；主任务中的子任务入口打开独立协作面板，整合各轮历史、通信来源与排队/送达状态，可继续、补充、中断和关闭；历史正文按子Run自己的状态和SSE呈现，不改变当前主会话。
 
 ## 12. 必须验证的故障窗口
 
@@ -370,4 +374,4 @@ TanStack Query 维护查询，React hooks 管理布局、草稿和流状态。�
 8. 数据库暂时不可写：禁止发起新的不可记录副作用，已在途动作保留核对线索。
 9. 部署图版本升级时仍有等待问题的任务：使用兼容版本恢复，或明确暂停等待迁移。
 
-这些是后续实现的验收场景，并非本轮已经执行的测试。实际界面流程与发布要求见[部署与验收](deployment-and-validation.md)。
+这些是保留的故障窗口验收要求；已执行部分及真实边界见[状态清单](../implementation-status.md)，不将整份清单视为全部已通过，也不因本次文档同步重复旧验收。实际界面流程与发布要求见[部署与验收](deployment-and-validation.md)。

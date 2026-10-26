@@ -21,6 +21,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from workbench.composition import tables  # noqa: F401
 from workbench.config import PROJECT_ROOT, get_settings
 from workbench.contracts.errors import AppError
 from workbench.infrastructure.database import database_ready, engine, now
@@ -179,7 +180,7 @@ def _owns_api_listener(record, settings):
 
 
 def _healthy_owned(state, client, settings, url):
-    required = {"vault-broker", "api", "worker", "file-worker"}
+    required = {"vault-broker", "api", "worker", "file-worker", "media-worker"}
     if not required.issubset(state) or not all(process_matches(state[key]) for key in required):
         return False
     if not _owns_api_listener(state["api"], settings):
@@ -234,8 +235,12 @@ def workers_ready(state: dict) -> bool:
     from workbench.modules.runs.domain import WorkerHeartbeat
 
     with Session(engine()) as db:
-        for component, queue in (("worker", "agent"), ("file-worker", "files")):
-            if not process_matches(state[component]):
+        for component, queue in (
+            ("worker", "agent"),
+            ("file-worker", "files"),
+            ("media-worker", "media"),
+        ):
+            if component not in state or not process_matches(state[component]):
                 return False
             heartbeat = db.get(WorkerHeartbeat, state[component]["instance_id"])
             if (
@@ -295,7 +300,7 @@ def start(open_browser: bool) -> None:
                 )
                 engine.cache_clear()
             migrate()
-            for component in ("vault-broker", "api", "worker", "file-worker"):
+            for component in ("vault-broker", "api", "worker", "file-worker", "media-worker"):
                 if component in state and process_matches(state[component]):
                     continue
                 if component == "api":
@@ -329,6 +334,7 @@ def stop(*, force=False) -> None:
             "api",
             "worker",
             "file-worker",
+            "media-worker",
             "browser-companion",
             "desktop-companion",
             "vault-broker",
@@ -364,6 +370,13 @@ def stop(*, force=False) -> None:
                 failures.append("commands: 长命令资源关闭尚未全部确认，真实记录已保留。")
         except Exception:
             failures.append("commands: 无法核对长命令清理，未按名称或裸PID终止进程。")
+        try:
+            from workbench.modules.media.resources import stop_all as stop_media
+
+            if not stop_media():
+                failures.append("media: 本机生成进程尚未全部确认关闭，原回执与预留已保留。")
+        except Exception:
+            failures.append("media: 无法核对生成进程清理，未影响独立主模型。")
         if failures:
             raise SystemExit("工作台停止尚未全部确认：\n" + "\n".join(failures))
         write_state(state)
@@ -391,18 +404,26 @@ def main() -> None:
             "api",
             "worker",
             "file-worker",
+            "media-worker",
             "vault-broker",
             "browser-companion",
             "desktop-companion",
+            "settings-catalog",
         ],
     )
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--instance-id", default="")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--query", default="")
+    parser.add_argument("--schemas", action="store_true")
     args = parser.parse_args()
-    if args.command in {"worker", "file-worker"} and args.instance_id:
+    if args.command in {"worker", "file-worker", "media-worker"} and args.instance_id:
         os.environ["WORKBENCH_WORKER_ID"] = args.instance_id
-    if args.command == "migrate":
+    if args.command == "settings-catalog":
+        from workbench.modules.configuration.catalog import discover
+
+        print(json.dumps(discover(args.query, args.schemas), ensure_ascii=False, indent=2))
+    elif args.command == "migrate":
         migrate()
         print("应用迁移和 PostgreSQL 检查点已就绪。")
     elif args.command == "start":
@@ -452,6 +473,10 @@ def main() -> None:
         from workbench.entrypoints.file_worker import main as file_worker_main
 
         file_worker_main()
+    elif args.command == "media-worker":
+        from workbench.entrypoints.media_worker import main as media_worker_main
+
+        media_worker_main()
     elif args.command == "vault-broker":
         from workbench.infrastructure.vault.broker import VaultBroker
 

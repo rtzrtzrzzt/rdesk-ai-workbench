@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-workbench"
-version = "0.1.0"
+version = "1.0.0"
 description = "A native local AI workspace with durable tasks and replaceable model providers."
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
@@ -31,6 +31,7 @@ dependencies = [
   "jsonschema==4.26.0",
   "keyring==25.7.0",
   "psutil==7.2.2",
+  "PyYAML==6.0.3",
 ]
 
 [project.optional-dependencies]

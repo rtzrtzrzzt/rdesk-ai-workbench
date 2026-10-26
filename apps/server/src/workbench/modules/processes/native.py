@@ -14,9 +14,11 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
+from workbench.contracts.command_limits import MAX_COMMAND_TIMEOUT_SECONDS
 from workbench.infrastructure import native_process
 from workbench.infrastructure.vault.private import private_directory, read_private, write_json
 
@@ -52,6 +54,67 @@ class NativeDriver(Protocol):
     def discover(self) -> None: ...
     def signal_owned(self, signum: int) -> None: ...
     def closed(self) -> bool: ...
+
+
+def boot_id() -> str | None:
+    if sys.platform != "linux":
+        return None
+    try:
+        return str(uuid.UUID(Path("/proc/sys/kernel/random/boot_id").read_text().strip()))
+    except (OSError, ValueError):
+        return None
+
+
+def reboot_closure_proof(output_dir, nonce, *, legacy_prior_boot_id=None, expected_identity=None):
+    """Read-only proof; legacy attribution requires explicit operator confirmation."""
+    current = boot_id()
+    if current is None:
+        return None
+    directory = _directory(output_dir)
+    intent = _json(directory / "launch.json")
+    plan = intent.get("plan")
+    if (
+        intent.get("schema") != 1
+        or not isinstance(plan, dict)
+        or plan.get("command_id") != directory.name
+        or plan.get("nonce") != nonce
+    ):
+        raise RunnerError("Launch intent identity is not confirmed for reboot reconciliation.")
+    previous = intent.get("boot_id")
+    source = "launch_intent"
+    if previous is None:
+        if legacy_prior_boot_id is None:
+            return None
+        # Corroborate the operator's explicit attribution. Timestamps alone do
+        # not automatically attribute legacy records to a different boot.
+        import psutil
+
+        state = read_state(directory)
+        identity = state["supervisor_identity"]
+        if (
+            expected_identity is None
+            or identity != expected_identity
+            or state["nonce"] != nonce
+            or state["status"] != "outcome_unknown"
+            or state["owned_resources_closed"]
+            or identity["create_time"] >= psutil.boot_time()
+            or datetime.fromisoformat(state["finished_at"]).timestamp() >= psutil.boot_time()
+        ):
+            raise RunnerError("Legacy record does not match the explicitly confirmed old command.")
+        previous, source = legacy_prior_boot_id, "operator_confirmed_legacy"
+    if not isinstance(previous, str):
+        raise RunnerError("Invalid boot identity in command launch intent.")
+    previous = str(uuid.UUID(previous))
+    if previous == current:
+        return None
+    return {
+        "method": "host_reboot",
+        "source": source,
+        "command_id": directory.name,
+        "nonce": nonce,
+        "prior_boot_id": previous,
+        "observed_boot_id": current,
+    }
 
 
 def capability() -> dict:
@@ -158,6 +221,7 @@ def read_plan(plan_path: str | Path) -> dict:
         "output_dir",
         "sandbox_profile",
         "protected_roots",
+        "interactive",
     }
     if set(plan) - fields or plan.get("schema") != 1:
         raise RunnerError("Unsupported command plan schema or fields.")
@@ -176,13 +240,20 @@ def read_plan(plan_path: str | Path) -> dict:
         raise RunnerError("cwd must be an existing absolute directory.")
     seconds = plan.get("timeout_seconds")
     budget = plan.setdefault("max_output_bytes", 32 * 1024 * 1024)
-    if type(seconds) is not int or not 1 <= seconds <= 3600:
-        raise RunnerError("timeout_seconds must be 1..3600.")
+    if type(seconds) is not int or not 1 <= seconds <= MAX_COMMAND_TIMEOUT_SECONDS:
+        raise RunnerError(f"timeout_seconds must be 1..{MAX_COMMAND_TIMEOUT_SECONDS}.")
     if type(budget) is not int or not 1 <= budget <= MAX_OUTPUT:
         raise RunnerError("The combined log budget must be 1..64 MiB.")
     output = _directory(plan.get("output_dir", ""))
     if plan.setdefault("sandbox_profile", "native_scoped") not in {"native_scoped", "linux_bwrap"}:
         raise RunnerError("Unknown command sandbox profile.")
+    # Do not insert a default into old plans: launch.json binds the exact plan.
+    if type(plan.get("interactive", False)) is not bool:
+        raise RunnerError("interactive must be a boolean.")
+    if plan.get("interactive", False) and (
+        sys.platform != "linux" or plan["sandbox_profile"] != "native_scoped"
+    ):
+        raise RunnerError("Interactive PTY is supported only for Linux native_scoped commands.")
     protected = plan.setdefault("protected_roots", [])
     if (
         not isinstance(protected, list)
@@ -303,7 +374,7 @@ def launch(plan_path: str | Path, *, acknowledgement_timeout: float = 10) -> Lau
             return LaunchResult(
                 "outcome_unknown", None, None, "Existing intent lacks a valid receipt."
             )
-    write_json(intent, {"schema": 1, "plan": plan})
+    write_json(intent, {"schema": 1, "plan": plan, "boot_id": boot_id()})
     # Resolve this package without inheriting an untrusted PYTHONPATH.
     source_root = str(Path(__file__).resolve().parents[3])
     bootstrap = (
@@ -384,6 +455,16 @@ def stop(
     if expected_identity is not None and identity != expected_identity:
         return StopResult(
             "unknown", False, state, "Supervisor identity does not match caller receipt."
+        )
+    if state["supervisor_observation"] == "gone":
+        closed = state["owned_resources_closed"]
+        return StopResult(
+            "confirmed" if closed else "unknown",
+            closed,
+            state,
+            "Native closed receipt and supervisor exit confirmed."
+            if closed
+            else "Supervisor exited without a closure receipt; keep the resource record.",
         )
     marker = directory / "stop.json"
     if not marker.exists():

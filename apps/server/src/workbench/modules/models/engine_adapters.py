@@ -51,16 +51,71 @@ def resolve_engine(config) -> str:
 
 
 def request_options(config) -> dict:
+    from workbench.modules.models.prompt_templates import PromptTemplate, choices
+
+    template = PromptTemplate.model_validate(getattr(config, "prompt_template", None) or {})
+    if template.mode != "native":
+        effort = config.reasoning_effort
+        if effort is not None and effort not in {item.id for item in choices(template)}:
+            raise AppError("unsupported_reasoning_effort", "所选档位不在此连接的模板中。", 422)
+        if config.thinking_mode == "disabled" and effort is not None:
+            raise AppError("conflicting_generation_options", "关闭思考时不能指定思考档位。", 422)
+        # Qwen's default template otherwise injects xhigh instructions. Its
+        # medium branch is neutral; custom behavior remains a system instruction.
+        model = config.model_identifier.lower().rsplit("/", 1)[-1]
+        neutral = (
+            "medium"
+            if model.startswith("qwen3.8")
+            and config.thinking_mode != "disabled"
+            and resolve_engine(config) in {"sglang", "vllm"}
+            and getattr(config, "reasoning_adapter", "auto") == "auto"
+            and config.provider_type in {"openai_compatible", "openai_chat"}
+            else None
+        )
+        values = {**vars(config), "reasoning_effort": neutral}
+        return _native_options(SimpleNamespace(**values))
+    return _native_options(config)
+
+
+def _native_options(config) -> dict:
     engine = resolve_engine(config)
     mode, effort = config.thinking_mode, config.reasoning_effort
-    if mode not in {"default", "enabled", "disabled"} or effort not in {
-        None,
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-    }:
-        raise AppError("unsupported_generation_option", "思考模式或强度不受支持。", 422)
+    adapter = getattr(config, "reasoning_adapter", "auto")
+    declared = tuple(getattr(config, "native_reasoning_efforts", ()))
+    if adapter in {"openai_effort", "anthropic_adaptive"}:
+        expected = (
+            {"openai_compatible", "openai_chat", "openai_responses"}
+            if adapter == "openai_effort"
+            else {"anthropic", "anthropic_messages"}
+        )
+        if config.provider_type not in expected:
+            raise AppError("reasoning_protocol_mismatch", "原生思考适配与接口协议不匹配。", 422)
+        if effort is not None and effort not in declared:
+            raise AppError("unsupported_reasoning_effort", "此原生档位未在连接中声明支持。", 422)
+        if adapter == "anthropic_adaptive" and set(declared) - {"low", "medium", "high", "max"}:
+            raise AppError("unsupported_reasoning_effort", "此Claude适配不支持声明的档位。", 422)
+        if mode == "disabled":
+            if effort is not None:
+                raise AppError("conflicting_generation_options", "关闭思考时不能指定档位。", 422)
+            if adapter == "anthropic_adaptive":
+                return {"thinking": {"type": "disabled"}}
+            if "none" not in declared:
+                raise AppError("thinking_disable_unsupported", "此连接未声明支持关闭思考。", 422)
+            effort = "none"
+        if adapter == "anthropic_adaptive":
+            return {
+                **({"thinking": {"type": "adaptive"}} if mode == "enabled" else {}),
+                **({"output_config": {"effort": effort}} if effort is not None else {}),
+            }
+        if effort is None:
+            return {}
+        return (
+            {"reasoning": {"effort": effort}}
+            if config.provider_type == "openai_responses"
+            else {"reasoning_effort": effort}
+        )
+    if mode not in {"default", "enabled", "disabled"}:
+        raise AppError("unsupported_generation_option", "思考模式不受支持。", 422)
     if mode == "default" and effort is None:
         return {}
     if mode == "disabled" and effort is not None:
@@ -72,6 +127,7 @@ def request_options(config) -> dict:
         or engine not in {"sglang", "vllm"}
         or not qwen3
         or "thinking" in model
+        or adapter == "none"
     ):
         raise AppError(
             "unsupported_generation_option",
@@ -80,7 +136,7 @@ def request_options(config) -> dict:
         )
     if effort is not None and not model.startswith("qwen3.8"):
         raise AppError("unsupported_generation_option", "此模型尚无已确认的思考强度映射。", 422)
-    if effort == "high":
+    if effort not in {None, "low", "medium", "xhigh"}:
         raise AppError(
             "unsupported_reasoning_effort", "Qwen3.8思考强度仅支持low、medium、xhigh。", 422
         )
@@ -116,7 +172,21 @@ def reasoning_overrides(configuration: dict, effort: str | None) -> dict:
     """Freeze a task choice separately from the shared connection revision."""
     if effort is None:
         return {}
-    overrides = {"thinking_mode": "enabled", "reasoning_effort": effort}
+    from workbench.modules.models.prompt_templates import template_for
+
+    native = template_for(configuration).mode == "native"
+    overrides = (
+        {"thinking_mode": "disabled", "reasoning_effort": None}
+        if effort == "disabled"
+        else {
+            "thinking_mode": "enabled"
+            if native
+            else configuration.get("generation", {}).get("thinking_mode", "default"),
+            "reasoning_effort": effort,
+        }
+    )
+    if effort != "disabled" and overrides["thinking_mode"] == "disabled":
+        overrides["thinking_mode"] = "enabled" if native else "default"
     validate_generation(
         configuration["provider_type"],
         configuration["endpoint"],
@@ -129,14 +199,57 @@ def reasoning_overrides(configuration: dict, effort: str | None) -> dict:
 def supported_reasoning_efforts(configuration: dict) -> list[str]:
     # Use the same adapter validation as execution, including the engine identity;
     # never infer support from a display name in the browser.
+    from workbench.modules.models.prompt_templates import choices, template_for
+
+    template = template_for(configuration)
+    candidates = (
+        [item.id for item in choices(template)]
+        if template.mode != "native"
+        else configuration.get("generation", {}).get("native_reasoning_efforts")
+        or ["low", "medium", "high", "xhigh"]
+    )
     supported = []
-    for effort in ("low", "medium", "high", "xhigh"):
+    for effort in ["disabled", *candidates]:
         try:
             reasoning_overrides(configuration, effort)
         except AppError:
             continue
         supported.append(effort)
     return supported
+
+
+def reasoning_choices(configuration: dict) -> list[dict]:
+    from workbench.modules.models.prompt_templates import choices, template_for
+
+    template = template_for(configuration)
+    labels = {
+        "disabled": "关闭",
+        "none": "无",
+        "minimal": "最低",
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "xhigh": "极高",
+        "max": "Max",
+    }
+    if template.mode != "native":
+        labels.update({item.id: item.label for item in choices(template)})
+    return [
+        {
+            "value": value,
+            "label": labels.get(value, value),
+            "kind": "native" if value == "disabled" else template.mode,
+        }
+        for value in supported_reasoning_efforts(configuration)
+    ]
+
+
+def review_reasoning_overrides(configuration: dict, effort: str = "default") -> dict:
+    # A review has a narrower task and its own frozen choice. Do not infer
+    # parameters for providers/models without a confirmed effort adapter.
+    if effort == "default" or effort not in supported_reasoning_efforts(configuration):
+        return {}
+    return reasoning_overrides(configuration, effort)
 
 
 def _has_native_input(messages) -> bool:

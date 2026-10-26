@@ -7,7 +7,7 @@ import { Button } from '../../components/ui'
 import { DiagnosticsSnapshotView } from './DiagnosticsSnapshot'
 import './diagnostics.css'
 
-export function Diagnostics({ initiallyOpen = false }: { initiallyOpen?: boolean }) {
+export function Diagnostics({ initiallyOpen = true }: { initiallyOpen?: boolean }) {
   const [open, setOpen] = useState(initiallyOpen)
   const [visited, setVisited] = useState(initiallyOpen)
   return (

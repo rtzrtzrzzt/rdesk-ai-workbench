@@ -30,11 +30,26 @@ def status(run_id, waiting):
 def queue_turn(run_id):
     """User updates take priority; normal generations follow persisted arrival order."""
     with Session(engine()) as db:
+        from workbench.modules.media.resources import active_run_ids
+
+        residents = active_run_ids(db)
+        if residents and run_id not in residents:
+            return False
         interactive = (
             select(AgentMessage.id)
             .where(
                 AgentMessage.to_run_id == Run.id,
                 AgentMessage.source == "user",
+                AgentMessage.delivered_attempt_id.is_(None),
+            )
+            .correlate(Run)
+            .exists()
+        )
+        directed = (
+            select(AgentMessage.id)
+            .where(
+                AgentMessage.to_run_id == Run.id,
+                AgentMessage.kind == "instruction",
                 AgentMessage.delivered_attempt_id.is_(None),
             )
             .correlate(Run)
@@ -49,6 +64,22 @@ def queue_turn(run_id):
             .correlate(Run)
             .scalar_subquery()
         )
+        current = db.get(Run, run_id)
+        if current and current.kind == "conversation_naming":
+            foreground_ready = db.scalar(
+                select(Job.id)
+                .join(Run, Run.id == Job.run_id)
+                .where(
+                    Run.kind != "conversation_naming",
+                    Run.status.not_in(["succeeded", "failed", "cancelled"]),
+                    Run.cancel_requested_at.is_(None),
+                    Job.status == "queued",
+                    Job.available_at <= now(),
+                )
+                .limit(1)
+            )
+            if foreground_ready:
+                return False
         first = db.scalar(
             select(Run.id)
             .join(Job, Job.run_id == Run.id)
@@ -57,8 +88,16 @@ def queue_turn(run_id):
                 Job.status == "running",
                 Job.lease_until > now(),
                 Run.cancel_requested_at.is_(None),
+                Run.id.in_(residents) if residents else True,
             )
-            .order_by(interactive.desc(), arrived, Run.created_at, Run.id)
+            .order_by(
+                (Run.kind == "conversation_naming").asc(),
+                interactive.desc(),
+                directed.desc(),
+                arrived,
+                Run.created_at,
+                Run.id,
+            )
             .limit(1)
         )
         return first == run_id

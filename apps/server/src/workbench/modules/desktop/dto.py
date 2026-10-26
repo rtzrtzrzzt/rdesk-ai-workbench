@@ -21,6 +21,7 @@ class DesktopGrant(DTO):
     grant_id: UUID
     capture: bool = False
     control: bool = False
+    all_windows: bool = False
     target_window_id: str | None = Field(default=None, max_length=80)
     target_window_pid: int | None = Field(default=None, ge=1)
     expires_at: datetime

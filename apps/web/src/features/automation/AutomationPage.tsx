@@ -6,7 +6,6 @@ import { closePendingRequest } from '../../api/requests'
 import type { AutomationSessionCreate } from '../../api/automation'
 import type { Workspace } from '../../api/types'
 import { Button, EmptyState, PageHeading, Status } from '../../components/ui'
-import { PolicyForm } from './PolicyForm'
 import { SessionCard } from './SessionCard'
 import { errorText, json, record, statusLabel, text, uncertain } from './data'
 import './automation.css'
@@ -30,7 +29,7 @@ export function AutomationPage({
   const known = workspace ? { ...visited, [workspace.id]: workspace } : visited
   return (
     <div className="page-content automation-page">
-      <PageHeading title="电脑操作">按需启用原生执行器，明确授权后观察网页或目标窗口。</PageHeading>
+      <PageHeading title="电脑操作">查看浏览器与桌面能力、当前会话，或随时停止操作。</PageHeading>
       {!authenticated || !workspace ? (
         <EmptyState icon={Monitor} title={authenticated ? '先选择工作区' : '电脑操作服务尚未连接'}>
           连接工作台并选择工作区后，读取真实能力与授权状态。
@@ -50,9 +49,9 @@ export function AutomationPage({
 }
 function AutomationWorkspace({ workspaceId, active }: { workspaceId: string; active: boolean }) {
   const id = useId()
-  const policy = useQuery({
-    queryKey: ['automation-policy', workspaceId],
-    queryFn: () => automationApi.policy(workspaceId),
+  const settings = useQuery({
+    queryKey: ['automation-settings'],
+    queryFn: automationApi.settings,
     enabled: active,
   })
   const capabilities = useQuery({
@@ -70,7 +69,6 @@ function AutomationWorkspace({ workspaceId, active }: { workspaceId: string; act
   const [kind, setKind] = useState<AutomationSessionCreate['kind']>('browser')
   const [mode, setMode] = useState<'observe' | 'control'>('observe')
   const [ttl, setTtl] = useState('')
-  const [confirmed, setConfirmed] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createPending, setCreatePending] = useState<string | null>(() => {
     try {
@@ -138,13 +136,6 @@ function AutomationWorkspace({ workspaceId, active }: { workspaceId: string; act
     if (result.error || !result.data) throw result.error ?? new Error('能力状态尚未返回。')
     return result.data
   }
-  async function refreshPolicy() {
-    const result = await policy.refetch()
-    if (result.error) throw result.error
-    await refreshSessions()
-    if (!result.data) throw new Error('授权配置尚未返回。')
-    return result.data
-  }
   async function runtimeCommand(action: 'start' | 'stop') {
     if (
       (action === 'start' && (startingRuntime || runtimeUnknown)) ||
@@ -180,7 +171,7 @@ function AutomationWorkspace({ workspaceId, active }: { workspaceId: string; act
     }
   }
   async function create() {
-    if (creating || createPending || !confirmed) return
+    if (creating || createPending || !settings.data?.enabled) return
     let input: AutomationSessionCreate
     try {
       const seconds = ttl.trim() ? Number(ttl) : undefined
@@ -198,7 +189,6 @@ function AutomationWorkspace({ workspaceId, active }: { workspaceId: string; act
     }
     setCreating(true)
     setCreatePending(input.request_id)
-    setConfirmed(false)
     try {
       localStorage.setItem(`workbench.automation.create.${workspaceId}`, input.request_id)
     } catch {
@@ -323,28 +313,25 @@ function AutomationWorkspace({ workspaceId, active }: { workspaceId: string; act
           </details>
         )}
       </section>
-      {policy.data ? (
-        <PolicyForm
-          workspaceId={workspaceId}
-          policy={policy.data}
-          capabilities={capabilities.data}
-          onSaved={refreshPolicy}
-          onReadForeground={refreshCapabilities}
-        />
-      ) : (
-        <section className="automation-section">
-          <p className="page-note">{policy.error?.message ?? '正在读取真实授权配置…'}</p>
-          <Button onClick={() => void policy.refetch()}>读取授权</Button>
-        </section>
+      <p className="page-note">
+        {settings.data
+          ? settings.data.enabled
+            ? '电脑操作已开启；可在设置中关闭。首次使用时自动启动执行器，AI 操作由智能审核自动判断。'
+            : '电脑操作已关闭。请在设置中开启后使用。'
+          : '正在读取电脑操作设置…'}
+      </p>
+      {settings.isError && (
+        <p className="form-error" role="alert">
+          电脑操作设置读取失败。
+        </p>
       )}
       <section className="automation-section">
         <h2>会话</h2>
-        <details>
+        <details open>
           <summary>新建独立会话</summary>
           <fieldset
             className="automation-fields"
-            disabled={creating || !!createPending}
-            onChange={() => setConfirmed(false)}
+            disabled={creating || !!createPending || !settings.data?.enabled}
           >
             <div className="automation-grid">
               <label htmlFor={`${id}-kind`}>
@@ -387,23 +374,19 @@ function AutomationWorkspace({ workspaceId, active }: { workspaceId: string; act
             </label>
             <p className="page-note">
               {kind === 'browser'
-                ? '浏览器仅在已保存的精确 Origin 内工作，后续导航和输入仍逐次确认。'
+                ? '独立浏览器可访问公网网站，不继承日常浏览器的登录。'
                 : mode === 'control'
-                  ? '控制会话需要有效的目标窗口与输入授权；观察会话不会被升级。'
-                  : '桌面观察会话只捕获窗口，不允许输入。'}
+                  ? '控制会话可操作不同桌面窗口；切换窗口后需要重新观察。'
+                  : '桌面观察会话只捕获桌面，不允许输入。'}
             </p>
           </fieldset>
-          <label className="automation-check">
-            <input
-              type="checkbox"
-              checked={confirmed}
-              disabled={creating || !!createPending}
-              onChange={(e) => setConfirmed(e.target.checked)}
-            />
-            我明确创建上述会话，不自动截图或执行输入
-          </label>
           <Button
-            disabled={!confirmed || creating || !!createPending || runtime?.status !== 'running'}
+            disabled={
+              !settings.data?.enabled ||
+              creating ||
+              !!createPending ||
+              runtime?.status === 'unknown'
+            }
             onClick={() => void create()}
           >
             创建会话
@@ -438,7 +421,7 @@ function AutomationWorkspace({ workspaceId, active }: { workspaceId: string; act
                 key={session.id}
                 workspaceId={workspaceId}
                 session={session}
-                runtimeRunning={runtime?.status === 'running'}
+                runtimeRunning={runtime?.status === 'running' && !!settings.data?.enabled}
                 onRefresh={refreshSessions}
               />
             ))}
@@ -446,7 +429,7 @@ function AutomationWorkspace({ workspaceId, active }: { workspaceId: string; act
         ) : (
           <p className="page-note">
             {sessions.data
-              ? '当前没有真实会话。保存授权与明确启动后，可按需新建。'
+              ? '当前没有会话。电脑操作开启后，AI 会在需要时创建，也可以在此手动创建。'
               : '正在读取会话列表…'}
           </p>
         )}

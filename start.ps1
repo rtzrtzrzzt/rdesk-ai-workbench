@@ -18,5 +18,9 @@ if (-not $selectedPython) {
     Write-Error 'Python 3.12 is required. Install the native release from https://www.python.org/downloads/ .'
     exit 2
 }
-& $selectedPython @prefixArguments $bootstrapScript @args
+$pauseArguments = @()
+if ($args.Count -eq 0 -and -not [Console]::IsInputRedirected) {
+    $pauseArguments = @('--pause')
+}
+& $selectedPython @prefixArguments $bootstrapScript @pauseArguments @args
 exit $LASTEXITCODE

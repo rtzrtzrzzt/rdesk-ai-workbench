@@ -5,11 +5,24 @@ from fastapi import APIRouter
 from workbench.contracts.errors import AppError
 from workbench.contracts.responses import ERROR_RESPONSES
 from workbench.entrypoints.dependencies import DB, USER
-from workbench.modules.automation import dto, runtime, service
+from workbench.modules.automation import dto, runtime, service, settings
 from workbench.modules.automation.domain import AutomationAction
 from workbench.modules.workspace_service import get as workspace
 
 router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}/automation", responses=ERROR_RESPONSES)
+settings_router = APIRouter(prefix="/api/v1/automation", responses=ERROR_RESPONSES)
+
+
+@settings_router.get("/settings", response_model=dto.ComputerSettingsView)
+def computer_settings(db: DB, user: USER):
+    return settings.view(db, user.id)
+
+
+@settings_router.post("/settings", response_model=dto.ComputerSettingsView)
+def save_computer_settings(command: dto.ComputerSettingsSave, db: DB, user: USER):
+    result = settings.save(db, user.id, command)
+    db.commit()
+    return result
 
 
 @router.get("/policy", response_model=dto.PolicyView)

@@ -1,10 +1,16 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, true
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from workbench.infrastructure.database import Base, Entity
+
+
+class AutomationSettings(Entity, Base):
+    __tablename__ = "automation_settings"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True)
+    enabled: Mapped[bool] = mapped_column(default=True, server_default=true())
 
 
 class AutomationPolicy(Entity, Base):

@@ -294,7 +294,13 @@ def list_tasks(db: Session, user_id: str, workspace_id: str) -> list[dict]:
 
 
 def create_processing(
-    db: Session, user_id: str, workspace_id: str, artifact_id: str, command: dto.ProcessFile
+    db: Session,
+    user_id: str,
+    workspace_id: str,
+    artifact_id: str,
+    command: dto.ProcessFile,
+    *,
+    actor: Run | None = None,
 ) -> dict:
     def execute():
         artifact = get_artifact(db, user_id, workspace_id, artifact_id)
@@ -318,11 +324,19 @@ def create_processing(
                 **runtime,
             },
         )
-        run.root_run_id = run.id
+        run.parent_run_id = actor.id if actor else None
+        run.root_run_id = (actor.root_run_id or actor.id) if actor else run.id
         db.add(run)
         db.flush()
         db.add(Job(run_id=run.id, queue="files", available_at=now()))
-        emit(db, run.id, "run.accepted", {"status": "queued", "kind": "file"})
+        # A tool-created job has no Worker owner yet. Its acceptance belongs to
+        # the authorizing parent, whose lease remains fenced in this transaction.
+        emit(
+            db,
+            actor.id if actor else run.id,
+            "file.created" if actor else "run.accepted",
+            {"run_id": run.id, "status": "queued", "kind": "file"},
+        )
         return task_view(db, run)
 
     return idempotent(

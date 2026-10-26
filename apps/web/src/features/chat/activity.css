@@ -1,7 +1,43 @@
-.tool-activity {
-  margin: 9px 0 9px 42px;
+.run-duration {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 22px;
   color: var(--muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.run-duration > svg {
+  flex-shrink: 0;
+}
+.run-plan {
+  margin: 12px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.run-plan summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.run-plan ol {
+  margin: 12px 0 0;
+  padding-left: 22px;
+}
+.run-plan li + li {
+  margin-top: 8px;
+}
+.tool-activity {
+  margin: 9px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tool-media-task {
+  margin: 8px 0 16px 23px;
+  color: var(--fg);
+  font-size: 13px;
 }
 .tool-activity-heading {
   width: 100%;
@@ -9,14 +45,17 @@
   align-items: center;
   gap: 9px;
   text-align: left;
-  padding: 9px 10px;
+  padding: 9px 0;
   border-radius: 8px;
   cursor: pointer;
 }
-.tool-activity-heading:hover,
-.tool-activity-heading:focus-visible {
+button.tool-activity-heading:hover,
+button.tool-activity-heading:focus-visible {
   background: var(--hover);
   color: var(--fg);
+}
+div.tool-activity-heading {
+  cursor: default;
 }
 .tool-activity-heading > svg {
   flex: 0 0 auto;
@@ -213,6 +252,60 @@
   max-height: 300px;
   overflow: auto;
   font-size: 11px;
+}
+.agent-communication {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.agent-communication > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.agent-communication > summary::before {
+  content: '▸';
+}
+.agent-communication[open] > summary::before {
+  content: '▾';
+}
+.agent-communication > summary > time {
+  margin-left: auto;
+  font-size: 11px;
+}
+.agent-communication[open] > summary {
+  margin-bottom: 12px;
+}
+.agent-controls {
+  margin: 16px 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.agent-controls label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.agent-controls textarea {
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  padding: 10px 12px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+}
+.agent-controls textarea:disabled {
+  opacity: 0.6;
+}
+.agent-controls .button-row {
+  margin-top: 10px;
 }
 @keyframes activity-spin {
   to {

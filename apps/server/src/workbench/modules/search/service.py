@@ -212,7 +212,12 @@ async def get_engine_catalog(db, user_id, workspace_id, command):
 
 
 async def save_connection(
-    db: Session, user_id: str, workspace_id: str, command: dto.SearchConnectionSave
+    db: Session,
+    user_id: str,
+    workspace_id: str,
+    command: dto.SearchConnectionSave,
+    *,
+    before_save=None,
 ) -> dto.SearchConnectionView:
     # Check authorization before contacting a user-supplied endpoint; release the read transaction.
     await _db_call(
@@ -228,7 +233,13 @@ async def save_connection(
         _validate_engines(
             command.engines, await engine_catalog(command.endpoint, command.timeout_seconds)
         )
-    return await _db_call(_save_connection, db, user_id, workspace_id, command)
+
+    def publish():
+        if before_save:
+            before_save(db)
+        return _save_connection(db, user_id, workspace_id, command)
+
+    return await _db_call(publish)
 
 
 def _capability(row: SearchConnection | dto.SearchConnectionView | None) -> dto.SearchCapability:

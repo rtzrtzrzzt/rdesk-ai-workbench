@@ -16,6 +16,9 @@ import {
   PanelLeftClose,
   Plus,
   Settings,
+  Shrink,
+  CircleGauge,
+  CircleHelp,
   SlidersHorizontal,
   Sparkles,
   Unplug,
@@ -56,7 +59,7 @@ import { useAttachmentUploads } from '../features/chat/useAttachmentUploads'
 import { Composer } from '../features/chat/Composer'
 import { ReasoningEffortSelect } from '../features/chat/ReasoningEffortSelect'
 import type { ReasoningEffort } from '../features/chat/ReasoningEffortSelect'
-import { ContextUsage } from '../features/chat/ContextUsage'
+import { ContextUsage, type ContextUsageActions } from '../features/chat/ContextUsage'
 import { MessageContent, shouldRenderMessage } from '../features/chat/MessageContent'
 import { RunDetails, RunPanel } from '../features/chat/RunPanel'
 import { ConversationTimeline } from '../features/chat/ConversationTimeline'
@@ -74,6 +77,7 @@ import { ConnectionsPage, DiagnosticsPage, SettingsPage } from '../features/sett
 import { AuthView } from './Auth'
 import { MemoryPage } from '../features/memory/MemoryPage'
 import { FilesPage } from '../features/files/FilesPage'
+import { MediaPage } from '../features/media/MediaPage'
 import { ToolsPage } from '../features/tools/ToolsPage'
 import { AnalyticsPage } from '../features/analytics/AnalyticsPage'
 import { AutomationPage } from '../features/automation/AutomationPage'
@@ -82,6 +86,7 @@ import { DirectoryPicker } from '../features/workspaces/DirectoryPicker'
 import { ForkDialog } from '../features/chat/ForkDialog'
 import { ConversationExport } from '../features/chat/ConversationExport'
 import { useAccountActivity } from '../features/settings/useAccountActivity'
+import { useExperiencePreferences } from '../features/settings/useExperiencePreferences'
 import '../features/chat/conversation.css'
 import '../features/chat/activity.css'
 import './navigation.css'
@@ -90,6 +95,7 @@ type View =
   | 'chat'
   | 'tasks'
   | 'files'
+  | 'media'
   | 'memory'
   | 'tools'
   | 'devices'
@@ -101,6 +107,7 @@ const navigation: { id: View; label: string; icon: LucideIcon }[] = [
   { id: 'chat', label: '对话', icon: MessageSquare },
   { id: 'tasks', label: '后台任务', icon: ListTodo },
   { id: 'files', label: '文件', icon: FolderOpen },
+  { id: 'media', label: '生成', icon: Sparkles },
   { id: 'memory', label: '记忆与规则', icon: BookOpen },
   { id: 'tools', label: '工具与扩展', icon: Wrench },
   { id: 'devices', label: '电脑操作', icon: Monitor },
@@ -113,6 +120,7 @@ const uncertainRequest = (error: unknown) =>
   (error instanceof ApiError && (error.status >= 500 || error.status === 408))
 
 export function App() {
+  const contextActions = useRef<ContextUsageActions>(null)
   const queryClient = useQueryClient()
   const [view, setView] = useState<View>('chat')
   const [sidebar, setSidebar] = useState(true)
@@ -120,10 +128,6 @@ export function App() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [threadFilter, setThreadFilter] = useState('')
   const [settingsVisited, setSettingsVisited] = useState(false)
-  const [inputModes, setInputModes] = useState<Record<string, 'steer' | 'queue'>>({})
-  const [defaultInputMode, setDefaultInputMode] = useState<'queue' | 'steer'>(() =>
-    localStorage.getItem('workbench.input-mode') === 'steer' ? 'steer' : 'queue',
-  )
   const [workspaceId, setWorkspaceId] = useState(
     () => localStorage.getItem('workbench.workspace') ?? '',
   )
@@ -286,15 +290,21 @@ export function App() {
   const draftAttachments = attachmentDrafts[draftKey] ?? []
   const draftUploads = attachmentUploads.items.filter((item) => item.draftKey === draftKey)
   const steering = useSteering(lastRun?.id, refreshRun)
+  const experience = useExperiencePreferences(
+    authenticated ? session.data?.user.id : undefined,
+    sending || unconfirmed || steering.busy || !!steering.pending,
+  )
+  const defaultInputMode = experience.inputMode
   const canSteer =
     !!currentRun && (acceptsInput(currentRun.status) || currentRun.status === 'paused')
-  const steeringMode = active && (inputModes[draftKey] ?? defaultInputMode) === 'steer'
+  const steeringMode = active && defaultInputMode === 'steer'
   const selectedEffort = reasoningEfforts[draftKey]?.[effectiveModel?.id ?? '']
   const previousEffort =
     lastRun?.model_connection_id === effectiveModel?.id ? lastRun?.reasoning_effort : null
   const requestedEffort = selectedEffort === undefined ? previousEffort : selectedEffort
   const reasoningEffort =
-    requestedEffort && effectiveModel?.reasoning_efforts.includes(requestedEffort)
+    requestedEffort &&
+    effectiveModel?.reasoning_choices?.some((choice) => choice.value === requestedEffort)
       ? requestedEffort
       : null
   const composerModel = steeringMode
@@ -374,9 +384,6 @@ export function App() {
     return () => window.removeEventListener('workbench:unauthorized', expired)
   }, [session.refetch])
   useEffect(() => {
-    document.documentElement.dataset.theme = localStorage.getItem('workbench.theme') ?? 'system'
-  }, [])
-  useEffect(() => {
     if (!workspaces.data) return
     const selectable = workspaces.data.filter((item) => !item.archived && !item.removed_at)
     if (!workspace && workspaceId !== (selectable[0]?.id ?? '')) {
@@ -451,11 +458,6 @@ export function App() {
     const accepted = await steering.send(draft)
     if (accepted) {
       setDrafts((old) => ({ ...old, [key]: old[key]?.trim() === text.trim() ? '' : old[key] }))
-      setInputModes((old) => {
-        const next = { ...old }
-        delete next[key]
-        return next
-      })
     }
   }
   async function editMessage() {
@@ -579,12 +581,6 @@ export function App() {
       if (generation !== authGeneration()) return
       pendingSend.current = null
       setUnconfirmed(false)
-      setInputModes((old) => {
-        const next = { ...old }
-        delete next[draftKey]
-        delete next[selectedThread!.id]
-        return next
-      })
       setAttachmentDrafts((old) => ({ ...old, [draftKey]: [], [selectedThread!.id]: [] }))
       setDrafts((old) => ({ ...old, [draftKey]: '', [selectedThread!.id]: '' }))
       await Promise.all([
@@ -625,12 +621,6 @@ export function App() {
       pendingSend.current = null
       setUnconfirmed(false)
       setNotice('上次请求已确认。')
-      setInputModes((old) => {
-        const next = { ...old }
-        delete next[pending.draftKey]
-        delete next[pending.threadId]
-        return next
-      })
       setAttachmentDrafts((old) => ({ ...old, [pending.draftKey]: [], [pending.threadId]: [] }))
       setDrafts((old) => ({
         ...old,
@@ -749,7 +739,6 @@ export function App() {
     setAttachmentDrafts(discard)
     setTaskOptions(discard)
     setReasoningEfforts(discard)
-    setInputModes(discard)
     steering.forget([...runIds])
     if (pendingSend.current && threadIds.has(pendingSend.current.threadId)) {
       pendingSend.current = null
@@ -804,7 +793,6 @@ export function App() {
       setTaskOptions({})
       setReasoningEfforts({})
       clearStreaming()
-      setInputModes({})
       steering.reset()
       setSettingsVisited(false)
       pendingSend.current = null
@@ -881,82 +869,87 @@ export function App() {
   const composer = (
     <Composer
       controls={
-        <div className="composer-mode-row">
-          <div className="segmented" role="group" aria-label="输入用途">
-            <button
-              aria-pressed={!steeringMode}
-              onClick={() => setInputModes((old) => ({ ...old, [draftKey]: 'queue' }))}
-            >
-              Queue · 下一条消息
-            </button>
-            <button
-              aria-pressed={steeringMode}
-              disabled={!active}
-              onClick={() => setInputModes((old) => ({ ...old, [draftKey]: 'steer' }))}
-            >
-              Steer · 补充当前任务
-            </button>
+        steering.notice || steering.pending ? (
+          <div className="composer-meta-row">
+            {steering.notice && (
+              <p className="page-note" role="status">
+                {steering.notice}
+              </p>
+            )}
+            {steering.pending && (
+              <Button disabled={steering.busy} onClick={() => void sendSteering()}>
+                核对本次补充要求
+              </Button>
+            )}
           </div>
-          <label className="composer-default-mode">
-            运行时默认
-            <select
-              aria-label="运行时默认输入模式"
-              value={defaultInputMode}
-              onChange={(event) => {
-                const value = event.target.value as 'queue' | 'steer'
-                setDefaultInputMode(value)
-                localStorage.setItem('workbench.input-mode', value)
-                setInputModes((old) => ({ ...old, [draftKey]: value }))
-              }}
-            >
-              <option value="queue">Queue</option>
-              <option value="steer">Steer</option>
-            </select>
-          </label>
-          <ContextUsage
-            key={`${thread?.id ?? 'new'}:${effectiveModel?.id ?? ''}`}
-            threadId={authenticated ? thread?.id : undefined}
-            modelId={effectiveModel?.id}
-            contextWindow={effectiveModel?.context_window}
-            active={active}
-            disabledReason={
-              thread?.archived || thread?.deleting ? '归档或删除中的对话暂不可压缩。' : undefined
-            }
-          />
-          {steeringMode && (
-            <p className="page-note">
-              {currentRun?.status === 'paused'
-                ? '补充要求会先保存；继续任务后的下一次模型调用时生效。'
-                : '生成中会尽快按新要求调整；已开始的工具操作会先执行到安全边界。'}
-            </p>
-          )}
-          {steering.notice && (
-            <p className="page-note" role="status">
-              {steering.notice}
-            </p>
-          )}
-          {steering.pending && (
-            <Button disabled={steering.busy} onClick={() => void sendSteering()}>
-              核对本次补充要求
-            </Button>
-          )}
-          {steering.deliveries.slice(-3).map((item) => (
-            <p className="steering-delivery" role="status" key={item.id}>
-              {item.status === 'delivered'
-                ? '已生效'
-                : item.status === 'applying'
-                  ? '正在按新要求处理'
-                  : '已接收 · 正在安排调整'}
-              ：{item.input}
-            </p>
-          ))}
-          {steering.deliveryError && (
-            <p className="page-note" role="status">
-              补充要求投递状态暂时无法读取，将自动重试。
-            </p>
-          )}
-        </div>
+        ) : undefined
       }
+      contextControl={
+        <ContextUsage
+          key={`${thread?.id ?? 'new'}:${composerModel?.id ?? ''}`}
+          threadId={authenticated ? thread?.id : undefined}
+          modelId={composerModel?.id}
+          contextWindow={composerModel?.context_window}
+          active={active}
+          actionsRef={contextActions}
+          disabledReason={
+            thread?.archived || thread?.deleting ? '归档或删除中的对话暂不可压缩。' : undefined
+          }
+        />
+      }
+      commands={[
+        {
+          name: '压缩',
+          aliases: ['compact'],
+          description: '压缩当前上下文，保留关键摘要和聊天历史',
+          icon: Shrink,
+          disabledReason: !thread
+            ? '发送第一条消息后可压缩当前对话'
+            : thread.archived || thread.deleting
+              ? '请先恢复或选择可用对话'
+              : undefined,
+          run: () => contextActions.current?.compact(),
+        },
+        {
+          name: '上下文',
+          aliases: ['context', 'status'],
+          description: '查看上下文占用和压缩状态',
+          icon: CircleGauge,
+          run: () => contextActions.current?.show(),
+        },
+        {
+          name: '新对话',
+          aliases: ['new'],
+          description: '打开新对话，当前任务和历史仍保留',
+          icon: Plus,
+          run: () => {
+            setThreadId('')
+            setNotice('')
+            navigate('chat')
+          },
+        },
+        {
+          name: '设置',
+          aliases: ['settings'],
+          description: '调整消息行为、外观和任务偏好',
+          icon: Settings,
+          run: () => navigate('settings'),
+        },
+        {
+          name: '模型',
+          aliases: ['model'],
+          description: '查看和管理模型连接',
+          icon: SlidersHorizontal,
+          run: () => navigate('connections'),
+        },
+        {
+          name: '帮助',
+          aliases: ['help'],
+          description: '浏览可用的快捷命令',
+          icon: CircleHelp,
+          run: () => setDrafts((old) => ({ ...old, [draftKey]: '/' })),
+        },
+      ]}
       options={
         <TaskOptions
           workspaceId={workspace?.id}
@@ -1014,9 +1007,21 @@ export function App() {
       sending={steeringMode ? steering.busy : sending}
       running={active}
       sendLabel={
-        steeringMode ? (steering.pending ? '核对本次补充要求' : '发送补充要求') : '加入消息队列'
+        steeringMode
+          ? steering.pending
+            ? '核对本次补充要求'
+            : '发送引导消息'
+          : active
+            ? '加入消息队列'
+            : '发送消息'
       }
-      placeholder={steeringMode ? '补充要求，或调整当前任务的方向…' : '描述你想完成的工作…'}
+      placeholder={
+        steeringMode
+          ? '补充要求，或调整当前任务的方向…'
+          : active
+            ? '发送消息，当前任务完成后处理…'
+            : '描述你想完成的工作…'
+      }
       stopping={stopping || currentRun?.status === 'cancelling'}
       onStop={currentRun ? () => void cancel(currentRun) : undefined}
       models={
@@ -1044,7 +1049,17 @@ export function App() {
       onModelChange={setModelId}
       reasoningControl={
         <ReasoningEffortSelect
-          supported={composerModel?.reasoning_efforts ?? []}
+          choices={composerModel?.reasoning_choices ?? []}
+          defaultEffort={
+            composerModel?.generation.reasoning_effort ??
+            (composerModel?.generation.prompt_template?.mode === 'workbench'
+              ? 'medium'
+              : composerModel?.generation.prompt_template?.mode === 'custom'
+                ? composerModel.generation.prompt_template.default_effort
+                : null)
+          }
+          defaultDisabled={composerModel?.generation.thinking_mode === 'disabled'}
+          invalidValue={requestedEffort && !reasoningEffort ? requestedEffort : null}
           value={steeringMode ? (lastRun?.reasoning_effort ?? null) : reasoningEffort}
           disabled={steeringMode || sending || unconfirmed}
           steering={steeringMode}
@@ -1160,7 +1175,7 @@ export function App() {
         </div>
         <nav className="primary-nav">
           {navigation
-            .filter((item) => ['chat', 'files', 'memory'].includes(item.id))
+            .filter((item) => ['chat', 'files', 'memory', 'media'].includes(item.id))
             .map((item) => (
               <button
                 key={item.id}
@@ -1395,6 +1410,7 @@ export function App() {
                     <ConversationTimeline
                       key={threadId}
                       threadId={threadId}
+                      workspaceId={workspaceId}
                       messages={displayMessages}
                       runs={orderedRuns}
                       renderMessage={(message) =>
@@ -1497,6 +1513,7 @@ export function App() {
                       key={thread.id}
                       threadId={thread.id}
                       archived={thread.archived || thread.deleting}
+                      steerRunId={canSteer ? currentRun?.id : undefined}
                     />
                   )}{' '}
                   {composer}{' '}
@@ -1575,6 +1592,14 @@ export function App() {
               active={view === 'files'}
             />
           </div>
+          <div hidden={view !== 'media'}>
+            <MediaPage
+              workspace={workspace}
+              authenticated={authenticated}
+              userId={session.data?.user.id}
+              active={view === 'media'}
+            />
+          </div>
           <div hidden={view !== 'memory'}>
             <MemoryPage
               workspace={workspace}
@@ -1624,6 +1649,7 @@ export function App() {
                 userId={session.data?.user.id}
                 workspace={workspace}
                 models={models.data ?? []}
+                experience={experience}
               />
             </div>
           )}

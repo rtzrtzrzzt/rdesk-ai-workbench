@@ -69,7 +69,6 @@ export function SessionCard({
   const [freshDesktop, setFreshDesktop] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [downloadTarget, setDownloadTarget] = useState<ObservedDownloadLink | null>(null)
-  const [downloadConfirmed, setDownloadConfirmed] = useState(false)
   const [staleDownloadObservation, setStaleDownloadObservation] = useState<string | null>(null)
   // Kept in memory only: uncertain native input must never be regenerated or replayed.
   const submitted = useRef<unknown>(null)
@@ -124,7 +123,6 @@ export function SessionCard({
       )
       if (kind === 'download' && error instanceof ApiError && error.status === 409) {
         setDownloadTarget(null)
-        setDownloadConfirmed(false)
         if (command.kind === 'download') setStaleDownloadObservation(command.input.last_observation)
       }
       try {
@@ -154,22 +152,13 @@ export function SessionCard({
     }
   }
   async function download() {
-    if (
-      !downloadTarget ||
-      !downloadConfirmed ||
-      !targetStillCurrent ||
-      !usable ||
-      !downloadSupported ||
-      busy ||
-      pending
-    )
+    if (!downloadTarget || !targetStillCurrent || !usable || !downloadSupported || busy || pending)
       return
     const input: BrowserDownload = {
       request_id: crypto.randomUUID(),
       last_observation: downloadTarget.observationId,
       target_ref: downloadTarget.targetRef,
     }
-    setDownloadConfirmed(false)
     await perform(
       { id: input.request_id, kind: 'download', sessionId: session.id, input },
       { sessionId: session.id, input, url: downloadTarget.url },
@@ -257,7 +246,7 @@ export function SessionCard({
                 )
               }}
             >
-              {session.kind === 'desktop' ? '明确捕获当前目标窗口' : '读取当前 DOM 与网页纯文本'}
+              {session.kind === 'desktop' ? '捕获当前桌面' : '读取当前 DOM 与网页纯文本'}
             </Button>
             {!usable && (
               <p className="page-note">
@@ -278,7 +267,6 @@ export function SessionCard({
                 session.kind === 'browser' && session.status === 'active' && downloadSupported
                   ? (link) => {
                       setDownloadTarget(link)
-                      setDownloadConfirmed(false)
                     }
                   : undefined
               }
@@ -309,23 +297,11 @@ export function SessionCard({
                     当前观察已变化，请重新观察并选择链接，不会使用旧引用下载。
                   </p>
                 )}
-                <label className="automation-check">
-                  <input
-                    type="checkbox"
-                    checked={downloadConfirmed}
-                    disabled={
-                      !usable || !targetStillCurrent || busy || !!pending || !downloadSupported
-                    }
-                    onChange={(event) => setDownloadConfirmed(event.target.checked)}
-                  />
-                  我确认拉取上述链接，保存为当前工作区的受管原件
-                </label>
                 <div className="button-row">
                   <Button
                     disabled={busy}
                     onClick={() => {
                       setDownloadTarget(null)
-                      setDownloadConfirmed(false)
                     }}
                   >
                     取消选择
@@ -333,12 +309,7 @@ export function SessionCard({
                   <Button
                     variant="primary"
                     disabled={
-                      !downloadConfirmed ||
-                      !usable ||
-                      !targetStillCurrent ||
-                      busy ||
-                      !!pending ||
-                      !downloadSupported
+                      !usable || !targetStillCurrent || busy || !!pending || !downloadSupported
                     }
                     onClick={() => void download()}
                   >
@@ -349,7 +320,7 @@ export function SessionCard({
             )}
             {session.kind === 'desktop' && freshDesktop !== observationId && (
               <p className="page-note">
-                桌面输入前请在本页重新捕获一次窗口；已有截图不会自动视为仍有效。
+                桌面输入前请在本页重新捕获；已有截图不会自动视为仍有效。
               </p>
             )}
             {(session.kind === 'browser' ||
@@ -375,7 +346,7 @@ export function SessionCard({
             )}
             {session.kind === 'desktop' && session.mode !== 'control' && (
               <p className="page-note">
-                观察会话只捕获窗口，不能升级为控制；需要单独新建已授权的控制会话。
+                观察会话只捕获桌面，不能升级为控制；需要单独新建控制会话。
               </p>
             )}
             {pending && (

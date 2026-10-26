@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from workbench.modules.models.prompt_templates import PromptTemplate
+
 Direction = Literal["input", "output", "input_output", "behavior"]
 CAPABILITY_DIRECTIONS = MappingProxyType(
     {
@@ -54,7 +56,12 @@ class Generation(BaseModel):
     cache_observation: Literal["standard", "sglang"] = "standard"
     engine_kind: Literal["auto", "sglang", "vllm", "llama_cpp", "tensorrt_llm", "other"] = "auto"
     thinking_mode: Literal["default", "enabled", "disabled"] = "default"
-    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
+    reasoning_adapter: Literal["auto", "none", "openai_effort", "anthropic_adaptive"] = "auto"
+    native_reasoning_efforts: list[
+        Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+    ] = Field(default_factory=list, max_length=7)
+    prompt_template: PromptTemplate = Field(default_factory=PromptTemplate)
 
 
 def normalized(values: dict) -> dict:

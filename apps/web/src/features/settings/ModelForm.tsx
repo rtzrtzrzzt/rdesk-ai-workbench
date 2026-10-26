@@ -2,10 +2,22 @@ import { useState } from 'react'
 import type { Generation, ModelConnection, ModelInput, ModelUpdate } from '../../api/types'
 import { ApiError } from '../../api/client'
 import { Button } from '../../components/ui'
-type GenerationPreferences = Generation & {
+import {
+  defaultTemplate,
+  PromptTemplateEditor,
+  templateError,
+  type PromptTemplate,
+} from './PromptTemplateEditor'
+import type { ReasoningChoice } from '../chat/ReasoningEffortSelect'
+type NativeEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+const nativeEfforts: NativeEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+type GenerationPreferences = Omit<Generation, 'reasoning_effort' | 'prompt_template'> & {
   thinking_mode?: 'default' | 'enabled' | 'disabled'
-  reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh' | null
+  reasoning_effort?: string | null
   engine_kind?: 'auto' | 'sglang' | 'vllm' | 'llama_cpp' | 'tensorrt_llm' | 'other'
+  reasoning_adapter?: 'auto' | 'none' | 'openai_effort' | 'anthropic_adaptive'
+  native_reasoning_efforts?: NativeEffort[]
+  prompt_template?: PromptTemplate
 }
 export function ModelForm({
   initial,
@@ -30,22 +42,58 @@ export function ModelForm({
   const [clearKey, setClearKey] = useState(false)
   const [remote, setRemote] = useState(initial?.allow_remote ?? false)
   const [context, setContext] = useState(initial?.context_window ?? 8192)
-  const [generation, setGeneration] = useState<GenerationPreferences>(
-    initial?.generation ?? {
+  const [generation, setGeneration] = useState<GenerationPreferences>(() => {
+    const stored:
+      | (Omit<GenerationPreferences, 'prompt_template'> & {
+          prompt_template?: Partial<PromptTemplate>
+        })
+      | undefined = initial?.generation
+    const fallback = defaultTemplate()
+    return {
       max_output_tokens: null,
       timeout_seconds: 180,
       temperature: null,
-      cache_observation: 'standard' as const,
-    },
-  )
+      cache_observation: 'standard',
+      ...stored,
+      prompt_template: {
+        ...fallback,
+        ...stored?.prompt_template,
+        presets: stored?.prompt_template?.presets ?? fallback.presets,
+      },
+    }
+  })
   const [busy, setBusy] = useState(false)
   const [conflict, setConflict] = useState(false)
   const [error, setError] = useState('')
+  const template = generation.prompt_template ?? defaultTemplate()
+  const nativeChoices =
+    generation.reasoning_adapter === 'none'
+      ? []
+      : generation.reasoning_adapter === 'openai_effort' ||
+          generation.reasoning_adapter === 'anthropic_adaptive'
+        ? (generation.native_reasoning_efforts ?? []).map((value) => ({ value, label: value }))
+        : (
+            (initial as (ModelConnection & { reasoning_choices?: ReasoningChoice[] }) | undefined)
+              ?.reasoning_choices ?? []
+          ).filter((choice) => choice.value !== 'disabled')
+  const connectionChoices =
+    generation.reasoning_effort &&
+    !nativeChoices.some((choice) => choice.value === generation.reasoning_effort)
+      ? [
+          ...nativeChoices,
+          { value: generation.reasoning_effort, label: `${generation.reasoning_effort}（当前值）` },
+        ]
+      : nativeChoices
   return (
     <form
       className="stacked-form"
       onSubmit={(event) => {
         event.preventDefault()
+        const invalidTemplate = templateError(template)
+        if (invalidTemplate) {
+          setError(invalidTemplate)
+          return
+        }
         setBusy(true)
         setError('')
         setConflict(false)
@@ -117,7 +165,27 @@ export function ModelForm({
         <input type="checkbox" checked={remote} onChange={(e) => setRemote(e.target.checked)} />
         <span>允许向远程模型发送任务内容（远程附件仍需逐次同意）</span>
       </label>
-      <details className="settings-editor model-advanced">
+      <PromptTemplateEditor
+        value={template}
+        onChange={(next) => {
+          const modeChanged = next.mode !== template.mode
+          setGeneration({
+            ...generation,
+            prompt_template: next,
+            reasoning_effort:
+              modeChanged ||
+              (next.mode === 'custom' &&
+                !next.presets.some((preset) => preset.id === generation.reasoning_effort))
+                ? null
+                : generation.reasoning_effort,
+            thinking_mode:
+              modeChanged && generation.thinking_mode === 'disabled'
+                ? 'default'
+                : generation.thinking_mode,
+          })
+        }}
+      />
+      <details className="settings-editor model-advanced" open>
         <summary>高级参数 · 上下文、生成与缓存观测</summary>
         <div className="settings-editor-content">
           <label>
@@ -194,28 +262,108 @@ export function ModelForm({
               <option value="disabled">关闭思考</option>
             </select>
           </label>
-          <label>
-            思考强度
-            <select
-              value={generation.reasoning_effort ?? ''}
-              disabled={generation.thinking_mode === 'disabled'}
-              onChange={(e) =>
-                setGeneration({
-                  ...generation,
-                  reasoning_effort: (e.target.value ||
-                    null) as GenerationPreferences['reasoning_effort'],
-                })
-              }
-            >
-              <option value="">服务默认</option>
-              <option value="low">低（low）</option>
-              <option value="medium">中（medium）</option>
-              {(!/qwen3\.8/i.test(model) || generation.reasoning_effort === 'high') && (
-                <option value="high">高（high）</option>
+          {template.mode === 'native' && (
+            <>
+              <label>
+                原生思考参数适配
+                <select
+                  value={generation.reasoning_adapter ?? 'auto'}
+                  onChange={(event) =>
+                    setGeneration({
+                      ...generation,
+                      reasoning_adapter: event.target
+                        .value as GenerationPreferences['reasoning_adapter'],
+                      reasoning_effort: null,
+                      thinking_mode: 'default',
+                      native_reasoning_efforts:
+                        event.target.value === 'anthropic_adaptive'
+                          ? (generation.native_reasoning_efforts ?? []).filter((effort) =>
+                              ['low', 'medium', 'high', 'max'].includes(effort),
+                            )
+                          : generation.native_reasoning_efforts,
+                    })
+                  }
+                >
+                  <option value="auto">自动适配</option>
+                  <option value="none">不发送原生思考参数</option>
+                  <option value="openai_effort" disabled={provider === 'anthropic'}>
+                    OpenAI 原生 effort
+                  </option>
+                  <option value="anthropic_adaptive" disabled={provider !== 'anthropic'}>
+                    Claude 自适应思考
+                  </option>
+                </select>
+              </label>
+              {(generation.reasoning_adapter === 'openai_effort' ||
+                generation.reasoning_adapter === 'anthropic_adaptive') && (
+                <fieldset className="prompt-template-preset">
+                  <legend>声明模型支持的原生档位</legend>
+                  <div className="prompt-template-native-efforts">
+                    {nativeEfforts
+                      .filter(
+                        (effort) =>
+                          generation.reasoning_adapter !== 'anthropic_adaptive' ||
+                          ['low', 'medium', 'high', 'max'].includes(effort),
+                      )
+                      .map((effort) => (
+                        <label className="checkbox-label" key={effort}>
+                          <input
+                            type="checkbox"
+                            checked={generation.native_reasoning_efforts?.includes(effort) ?? false}
+                            onChange={(event) =>
+                              setGeneration({
+                                ...generation,
+                                native_reasoning_efforts: event.target.checked
+                                  ? [...(generation.native_reasoning_efforts ?? []), effort]
+                                  : (generation.native_reasoning_efforts ?? []).filter(
+                                      (item) => item !== effort,
+                                    ),
+                                reasoning_effort:
+                                  !event.target.checked && generation.reasoning_effort === effort
+                                    ? null
+                                    : generation.reasoning_effort,
+                                thinking_mode:
+                                  !event.target.checked &&
+                                  effort === 'none' &&
+                                  generation.reasoning_adapter === 'openai_effort' &&
+                                  generation.thinking_mode === 'disabled'
+                                    ? 'default'
+                                    : generation.thinking_mode,
+                              })
+                            }
+                          />
+                          <span>{effort}</span>
+                        </label>
+                      ))}
+                  </div>
+                  <p className="page-note">
+                    请按模型文档勾选；声明不代表服务已经验证支持这些参数。
+                  </p>
+                </fieldset>
               )}
-              <option value="xhigh">极高（xhigh）</option>
-            </select>
-          </label>
+              <label>
+                默认原生思考强度
+                <select
+                  value={generation.reasoning_effort ?? ''}
+                  disabled={generation.thinking_mode === 'disabled'}
+                  onChange={(e) =>
+                    setGeneration({
+                      ...generation,
+                      reasoning_effort: (e.target.value ||
+                        null) as GenerationPreferences['reasoning_effort'],
+                    })
+                  }
+                >
+                  <option value="">服务默认</option>
+                  {connectionChoices.map((choice) => (
+                    <option key={choice.value} value={choice.value}>
+                      {choice.label}（{choice.value}）
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
           <label>
             推理引擎声明
             <select
@@ -237,7 +385,6 @@ export function ModelForm({
           </label>
           <p className="page-note">
             思考选项取决于模型、接口和实际推理引擎；声明引擎不代表能力已经验证。
-            {/qwen3\.8/i.test(model) && 'Qwen3.8 支持 low、medium、xhigh 强度。'}
           </p>
           <label>
             缓存观测

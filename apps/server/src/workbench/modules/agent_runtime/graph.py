@@ -24,6 +24,7 @@ class State(TypedDict):
     call_index: int
     join_needed: bool
     input_pending: bool
+    media_wait_needed: bool
 
 
 async def model_node(state: State) -> dict:
@@ -67,11 +68,11 @@ async def checkpoint_node(state: State) -> dict:
                 "防循环暂停后，此调用未执行；请结合用户补充重新规划。",
             )
     if state.get("call_index", 0) < len(state.get("calls", [])):
-        from workbench.modules.collaboration.inbox import has_new_user_input
+        from workbench.modules.collaboration.inbox import has_new_directive
 
         def pending_user():
             with Session(engine()) as db:
-                return has_new_user_input(db, state["run_id"])
+                return has_new_directive(db, state["run_id"])
 
         if await asyncio.to_thread(pending_user):
             return await skip_pending_calls(
@@ -139,7 +140,26 @@ async def tool_node(state: State) -> dict:
         "content": json.dumps(model_view(call["name"], result), ensure_ascii=False),
     }
     await asyncio.to_thread(persist_reply, state["run_id"], call, reply)
-    return {"messages": state["messages"] + [reply], "call_index": state["call_index"] + 1}
+    update = {"messages": state["messages"] + [reply], "call_index": state["call_index"] + 1}
+    if (
+        call["name"]
+        in {
+            "generate_image",
+            "generate_video",
+            "generate_audio",
+            "generate_3d",
+            "media_task_status",
+            "process_file",
+            "export_file",
+        }
+        and (result.get("run_id") or result.get("id"))
+        and not result.get("error")
+    ):
+        # Submit once, finish the current tool batch, then wait at a durable
+        # graph boundary. The next inference gets real artifacts, not just an
+        # asynchronous task ID that it might mistake for a file ID.
+        update["media_wait_needed"] = True
+    return update
 
 
 def persist_reply(run_id: str, call: dict, reply: dict) -> None:
@@ -217,6 +237,7 @@ async def join_node(state: State) -> dict:
         interrupt({"kind": "agents", "run_id": state["run_id"]})
     result = jsonable_encoder(await asyncio.to_thread(finish_wait, state["run_id"]))
     return {
+        "media_wait_needed": False,
         "messages": state["messages"]
         + [
             {
@@ -228,7 +249,7 @@ async def join_node(state: State) -> dict:
                     + json.dumps(model_view("inspect_agents", result), ensure_ascii=False)
                 ),
             }
-        ]
+        ],
     }
 
 
@@ -247,7 +268,11 @@ def build_graph(checkpointer):
     builder.add_conditional_edges(
         "checkpoint",
         lambda state: (
-            "tool" if state.get("call_index", 0) < len(state.get("calls", [])) else "model"
+            "tool"
+            if state.get("call_index", 0) < len(state.get("calls", []))
+            else "join"
+            if state.get("media_wait_needed")
+            else "model"
         ),
     )
     builder.add_conditional_edges("model", after_model)

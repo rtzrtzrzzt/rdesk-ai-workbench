@@ -3,7 +3,7 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from workbench.infrastructure.access_policy import AccessPolicy
@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     model_timeout_seconds: int = 180
     max_model_rounds: int = 24
     max_output_tokens: int = 4096
+    command_max_active_per_run: int = Field(default=2, ge=1, le=32)
+    command_max_active_total: int = Field(default=4, ge=1, le=32)
+
+    @model_validator(mode="after")
+    def command_capacity(self):
+        if self.command_max_active_per_run > self.command_max_active_total:
+            raise ValueError("每任务活动命令上限不得超过本机总上限。")
+        return self
 
     def access_policy(self) -> AccessPolicy:
         return AccessPolicy.from_values(

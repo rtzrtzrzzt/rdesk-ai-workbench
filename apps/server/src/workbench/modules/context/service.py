@@ -105,6 +105,7 @@ def _enqueue_idle(db, user_id, thread, model, row):
             "max_output_tokens": None,
             "runtime_options": defaults.options.model_dump(mode="json"),
             "tool_names": latest.config_snapshot.get("tool_names") if latest else None,
+            "extensions": list(latest.config_snapshot.get("extensions", [])) if latest else [],
         },
     )
     db.add(run)
@@ -446,7 +447,7 @@ def _commit(run_id, stamp, summary, artifact_id, after, source, included):
     with Session(engine()) as db, db.begin():
         run = owned_run(db, run_id)
         row = state(db, run.thread_id, lock=True)
-        from workbench.modules.collaboration.inbox import has_new_user_input
+        from workbench.modules.collaboration.inbox import has_new_directive
 
         if run.cancel_requested_at:
             raise asyncio.CancelledError
@@ -456,7 +457,7 @@ def _commit(run_id, stamp, summary, artifact_id, after, source, included):
             or row.request_run_id != run.id
             or memory_fingerprint(db, run) != stamp["memory_fingerprint"]
             or transfer_scope(db, run) != stamp["transfer_scope"]
-            or has_new_user_input(db, run_id, included)
+            or has_new_directive(db, run_id, included)
         ):
             raise AppError(
                 "generation_steered", "要求或来源已更新，正在重新整理上下文。", kind="steering"

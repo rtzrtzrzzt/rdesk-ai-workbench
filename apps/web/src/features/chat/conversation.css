@@ -1,27 +1,25 @@
 .composer-actions {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 9px;
 }
-.composer-mode-row {
+.composer-meta-row {
   margin-bottom: 10px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  justify-content: flex-end;
 }
-.composer-mode-row .segmented {
-  padding: 2px;
-}
-.composer-mode-row .segmented button {
-  padding: 6px 10px;
-  font-size: 11px;
-}
-.composer-mode-row > p {
+.composer-meta-row > p {
   width: 100%;
 }
 .composer-wrap {
   width: 100%;
+}
+.composer {
+  position: relative;
 }
 .composer-tools {
   min-width: 0;
@@ -49,26 +47,72 @@
   flex-shrink: 0;
 }
 .context-usage {
-  position: relative;
   font-size: 11px;
   color: var(--muted);
+  flex-shrink: 0;
 }
 .context-usage > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
   cursor: pointer;
   white-space: nowrap;
 }
-.context-usage progress {
-  width: 36px;
-  height: 5px;
-  margin-left: 5px;
-  accent-color: var(--fg);
+.context-usage > summary::-webkit-details-marker {
+  display: none;
+}
+.context-usage > summary:hover,
+.context-usage[open] > summary {
+  background: var(--hover);
+  color: var(--fg);
+}
+.context-ring {
+  position: relative;
+  display: flex;
+}
+.context-ring circle {
+  fill: none;
+  stroke-width: 2.5;
+}
+.context-ring-track {
+  stroke: var(--border);
+}
+.context-ring-fill {
+  stroke: currentColor;
+}
+.context-ring-warning {
+  color: var(--warn);
+}
+.context-ring-pending {
+  animation: context-pulse 1.5s ease-in-out infinite;
+}
+.context-ring-unknown {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+}
+@keyframes context-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .context-ring-pending {
+    animation: none;
+  }
 }
 .context-usage-details {
   position: absolute;
   bottom: calc(100% + 12px);
-  left: 0;
+  right: 0;
   z-index: 20;
-  width: min(310px, 75vw);
+  width: min(310px, calc(100vw - 60px));
   max-height: 55vh;
   overflow: auto;
   padding: 16px;
@@ -78,6 +122,78 @@
   box-shadow: 0 8px 24px #0002;
   color: var(--fg);
   line-height: 1.6;
+}
+.context-usage-details h3 {
+  margin: 0 0 15px;
+  font-size: 13px;
+}
+.slash-commands {
+  position: absolute;
+  z-index: 25;
+  bottom: calc(100% + 8px);
+  inset-inline: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px #0002;
+  color: var(--fg);
+}
+.slash-commands-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.slash-commands [role='listbox'] {
+  max-height: min(330px, 45dvh);
+  overflow-y: auto;
+}
+.slash-commands [role='option'] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 10px;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.slash-commands [aria-selected='true'] {
+  background: var(--hover);
+}
+.slash-commands [aria-disabled='true'] {
+  color: var(--muted);
+  cursor: default;
+}
+.slash-commands [role='option'] > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.slash-commands [role='option'] > span:first-of-type {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+.slash-commands strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.slash-commands small,
+.slash-command-alias {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.slash-command-alias {
+  margin-left: auto;
+}
+.slash-commands > p {
+  margin: 10px;
+  font-size: 12px;
+  color: var(--muted);
 }
 .context-usage dl {
   display: grid;
@@ -216,9 +332,6 @@
   .model-select-label select {
     max-width: min(170px, 35vw);
   }
-  .composer-mode-row .segmented button {
-    padding: 6px 8px;
-  }
 }
 
 .queue-panel {
@@ -263,25 +376,11 @@
   width: 100%;
   min-height: 85px;
 }
-.composer-default-mode {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--muted);
+.queue-item-actions {
+  flex-shrink: 0;
 }
-.composer-default-mode select {
-  padding: 4px;
-  width: auto;
-  font-size: 11px;
-}
-.steering-delivery {
-  margin: 0;
-  max-height: 70px;
-  overflow: auto;
-  overflow-wrap: anywhere;
-  font-size: 11px;
+.queue-item-actions > .button {
+  padding: 6px 8px;
 }
 .message-run-status {
   margin-left: 10px;
@@ -340,8 +439,8 @@
   .queue-item-content {
     flex-basis: 100%;
   }
-  .composer-default-mode {
-    margin-left: 0;
+  .queue-item-actions {
+    flex-wrap: wrap;
   }
 }
 .approval-review {
@@ -359,6 +458,14 @@
 }
 .approval-review small {
   color: var(--muted);
+}
+.approval-subject {
+  overflow-wrap: anywhere;
+}
+.approval-operation-details > summary {
+  padding: 8px 0;
+  color: var(--muted);
+  cursor: pointer;
 }
 .composer-library {
   color: var(--muted);

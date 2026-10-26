@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp, Pencil, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, CornerUpLeft, Pencil, Trash2 } from 'lucide-react'
 import { conversationsApi } from '../../api/conversations'
 import type { QueueItem, QueueView } from '../../api/types'
 import { Button, IconButton } from '../../components/ui'
@@ -8,9 +8,11 @@ import { Button, IconButton } from '../../components/ui'
 export function QueuePanel({
   threadId,
   archived = false,
+  steerRunId,
 }: {
   threadId: string
   archived?: boolean
+  steerRunId?: string
 }) {
   const client = useQueryClient()
   const query = useQuery({
@@ -52,6 +54,18 @@ export function QueuePanel({
       conversationsApi.updateQueue(threadId, item, changes, id),
     )
   }
+  function steer(item: QueueItem) {
+    if (!steerRunId) return
+    void mutate(`${item.id}:${item.version}:steer:${steerRunId}`, async (id) => {
+      const result = await conversationsApi.steerQueue(threadId, item, steerRunId, id)
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['messages', threadId] }),
+        client.invalidateQueries({ queryKey: ['runs', threadId] }),
+        client.invalidateQueries({ queryKey: ['steering-inputs', result.run_id] }),
+      ])
+      return result.queue
+    })
+  }
   if (query.isError)
     return (
       <div className="queue-panel" role="alert">
@@ -63,7 +77,7 @@ export function QueuePanel({
   return (
     <section className="queue-panel" aria-label="消息队列">
       <div className="run-line">
-        <strong>消息队列 · {items.length}</strong>
+        <strong>待发送 · {items.length}</strong>
         <span>{query.data?.paused ? '已暂停' : '成功完成后自动发送下一条'}</span>
         {query.data?.paused && (
           <Button
@@ -114,7 +128,21 @@ export function QueuePanel({
                   )}
                   <small>{item.status === 'paused' ? '已暂停' : '等待发送'}</small>
                 </div>
-                <div className="button-row">
+                <div className="button-row queue-item-actions">
+                  <Button
+                    disabled={busy || archived || !steerRunId || item.has_attachments}
+                    title={
+                      item.has_attachments
+                        ? '带附件的消息保留在队列中；当前引导仅支持文字。'
+                        : !steerRunId
+                          ? '有正在运行的任务时，可以用这条消息立即调整方向。'
+                          : '用这条消息调整当前任务，不再等待下一轮。'
+                    }
+                    onClick={() => steer(item)}
+                  >
+                    <CornerUpLeft size={13} />
+                    立即引导
+                  </Button>
                   <IconButton
                     icon={ArrowUp}
                     label="上移消息"

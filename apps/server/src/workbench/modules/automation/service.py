@@ -67,7 +67,66 @@ def policy_view(row):
 
 def get_policy(db, user_id, workspace_id):
     workspace(db, user_id, workspace_id)
-    return policy_view(current(db, user_id, workspace_id))
+    from workbench.modules.automation.settings import enabled
+
+    row = current(db, user_id, workspace_id)
+    result = policy_view(row)
+    if enabled(db, user_id):
+        result.configuration = automatic_configuration(row.configuration if row else {})
+        result.grant_expires_at = None
+    else:
+        result.configuration = dto.AutomationConfiguration()
+    return result
+
+
+def automatic_configuration(existing):
+    # The owner explicitly authorized all desktop windows and public websites.
+    # Remote transfer grants and the protected-network boundary remain separate.
+    return configuration(
+        {
+            **existing,
+            "browser_enabled": True,
+            "browser_public_network": True,
+            "desktop_capture": True,
+            "desktop_control": True,
+            "desktop_all_windows": True,
+            "target_window_id": None,
+            "target_window_pid": None,
+            "manual_takeover_ack": True,
+        }
+    )
+
+
+def stop_sessions(db, user_id, policy_id=None):
+    query = select(AutomationSession).where(
+        AutomationSession.user_id == user_id, AutomationSession.status.in_(LIVE)
+    )
+    if policy_id:
+        query = query.where(AutomationSession.policy_id == policy_id)
+    identifiers = set()
+    for session in db.scalars(query.order_by(AutomationSession.id).with_for_update()):
+        session.status = "stopping"
+        identifiers.add(session.id)
+    lease = db.get(DesktopWriterLease, "local-desktop", with_for_update=True)
+    if lease and lease.session_id in identifiers:
+        lease.revoked = True
+
+
+def automatic_policy(db, user_id, workspace_id):
+    row = current(db, user_id, workspace_id)
+    checked = automatic_configuration(row.configuration if row else {})
+    values = checked.model_dump(mode="json")
+    if row is None:
+        row = AutomationPolicy(user_id=user_id, workspace_id=workspace_id, configuration=values)
+        db.add(row)
+        db.flush()
+    elif row.configuration != values or row.grant_expires_at is not None:
+        stop_sessions(db, user_id, row.id)
+        row.configuration = values
+        row.grant_expires_at = None
+        row.version += 1
+        db.flush()
+    return row
 
 
 def save_policy(db, user_id, workspace_id, command):
@@ -90,16 +149,7 @@ def save_policy(db, user_id, workspace_id, command):
             if checked.desktop_capture
             else None
         )
-        for session in db.scalars(
-            select(AutomationSession)
-            .where(AutomationSession.policy_id == row.id, AutomationSession.status.in_(LIVE))
-            .order_by(AutomationSession.id)
-            .with_for_update()
-        ):
-            session.status = "stopping"
-            lease = db.get(DesktopWriterLease, "local-desktop", with_for_update=True)
-            if lease and lease.session_id == session.id:
-                lease.revoked = True
+        stop_sessions(db, user_id, row.id)
         return policy_view(row).model_dump(mode="json")
 
     return idempotent(
@@ -168,11 +218,17 @@ def client(row):
 
 
 def reserve_session(user_id, workspace_id, command, run_id):
+    from workbench.modules.automation.settings import enabled
+
+    with Session(engine()) as db:
+        workspace(db, user_id, workspace_id)
+        if not enabled(db, user_id):
+            raise denied("电脑操作已在设置中关闭。", "computer_control_disabled")
     native = runtime.status()
+    if native.status == "stopped":
+        native = runtime.start()
     if native.status != "running":
-        raise AppError(
-            "automation_runtime_required", "请用户先明确启动原生执行器。", 409, "dependency"
-        )
+        raise AppError("automation_runtime_required", native.reason, 409, "dependency")
     identifier = str(command.request_id)
     with Session(engine()) as db, db.begin():
         from sqlalchemy import text
@@ -210,9 +266,9 @@ def reserve_session(user_id, workspace_id, command, run_id):
         )
         if closed:
             raise AppError("request_expired", "此请求已关闭，请明确创建新的会话请求。", 410)
-        policy = current(db, user_id, workspace_id)
-        if policy is None:
-            raise denied("请用户先配置电脑操作授权。")
+        if not enabled(db, user_id):
+            raise denied("电脑操作已在设置中关闭。", "computer_control_disabled")
+        policy = automatic_policy(db, user_id, workspace_id)
         row = AutomationSession(
             id=identifier,
             user_id=user_id,
@@ -229,7 +285,7 @@ def reserve_session(user_id, workspace_id, command, run_id):
         db.add(row)
         db.flush()
         _, config = assert_policy(db, row, transfer=True)
-        if row.kind == "desktop":
+        if row.kind == "desktop" and not config.desktop_all_windows:
             row.expires_at = min(row.expires_at, policy.grant_expires_at)
         if row.kind == "desktop" and row.mode == "control":
             db.execute(
@@ -285,6 +341,7 @@ async def create_session(user_id, workspace_id, command, *, run_id=None):
                         enabled=True,
                         allowed_origins=config.browser_origins,
                         local_origins=config.browser_local_origins,
+                        allow_public_network=config.browser_public_network,
                         ttl_seconds=command.ttl_seconds,
                     ),
                 )
@@ -304,7 +361,10 @@ async def create_session(user_id, workspace_id, command, *, run_id=None):
                         control=config.desktop_control,
                         target_window_id=config.target_window_id,
                         target_window_pid=config.target_window_pid,
-                        expires_at=policy.grant_expires_at,
+                        all_windows=config.desktop_all_windows,
+                        expires_at=row.expires_at
+                        if config.desktop_all_windows
+                        else policy.grant_expires_at,
                     ),
                 )
         except AppError as exc:
@@ -867,7 +927,7 @@ async def capabilities(user_id, workspace_id):
         foreground=foreground,
         remote_models=models,
         limitations=[
-            "可选原生执行器按需启动；每次网页/输入动作仍需独立批准。",
+            "执行器按需启动；电脑操作总开关统一授权范围，AI操作仍经过独立审核。",
             "网络代理是应用约束，不提供操作系统级沙箱。",
             "只能发现部分人工输入；停止不能撤销已发送的页面或原生动作。",
             "Windows/macOS真实设备验证待完成，Wayland需要Portal适配。",

@@ -29,6 +29,15 @@ EXCLUDED = frozenset(
 
 
 def authorized_path(root: Path, value: str) -> Path:
+    root = root.resolve()
+    lexical = Path(os.path.abspath(root / value))
+    if lexical.is_relative_to(root) and any(
+        part in EXCLUDED or part == ".env" or part.startswith(".env.")
+        for part in lexical.relative_to(root).parts
+    ):
+        raise AppError(
+            "protected_path", "该路径包含受保护的运行数据、凭据或版本管理内容。", 403, "policy"
+        )
     candidate = (root / value).resolve()
     if not candidate.is_relative_to(root.resolve()):
         raise AppError("path_not_allowed", "目标位于当前工作区之外。", 403, "policy")
@@ -95,85 +104,66 @@ def _walk_files(root: Path, path: Path, *, limit: int) -> tuple[list[Path], bool
     return found, False
 
 
-def list_files(root: Path, value: str) -> dict:
-    path = authorized_path(root, value)
-    if not path.is_dir():
-        raise AppError("directory_not_found", "指定目录不存在。", 404)
-    found, truncated = _walk_files(root, path, limit=500)
-    return {"files": [str(item.relative_to(root)) for item in found], "truncated": truncated}
+def list_files(root: Path, value: str, *, cursor=None, limit=500) -> dict:
+    from workbench.modules.tools.file_queries import find_files
+
+    return find_files(root, {"path": value, "cursor": cursor, "limit": limit})
 
 
 async def search_files(root: Path, values: dict) -> dict:
-    path = authorized_path(root, values["path"])
-    if path.is_dir():
-        files, truncated = await asyncio.to_thread(_walk_files, root, path, limit=10_000)
-    elif path.is_file():
-        files, truncated = [path], False
-    else:
-        raise AppError("file_not_found", "搜索路径不存在。", 404)
-    output = {"stdout": "", "stderr": "", "truncated": truncated, "exit_code": 1}
-    started = time.monotonic()
-    while files:
-        batch, size = [], 0
-        while files and len(batch) < 128 and size < 12_000:
-            candidate = files.pop()
-            if _visible_path(root, candidate):
-                value = str(candidate)
-                batch.append(value)
-                size += len(value.encode()) + 1
-        if not batch:
-            continue
-        result = await run_process(
-            [
-                "rg",
-                "--no-config",
-                "--fixed-strings",
-                "--with-filename",
-                "--line-number",
-                "--max-count",
-                "20",
-                "--",
-                values["query"],
-                *batch,
-            ],
-            root,
-            max(1, round(10 - (time.monotonic() - started))),
-            stop_at_output_limit=True,
-        )
-        if result["exit_code"] not in {0, 1} and not result["truncated"]:
-            raise AppError("search_failed", "文本搜索未完成，请检查路径或搜索工具。")
-        if result["exit_code"] == 0:
-            output["exit_code"] = 0
-        for stream in ("stdout", "stderr"):
-            combined = (output[stream] + result[stream]).encode()
-            output[stream] = combined[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
-            output["truncated"] |= len(combined) > MAX_OUTPUT_BYTES
-        output["truncated"] |= result["truncated"]
-        if (
-            output["truncated"]
-            and len(output["stdout"].encode()) >= MAX_OUTPUT_BYTES
-            or result.get("timed_out")
-            or time.monotonic() - started >= 10
-        ):
-            output["truncated"] |= bool(files) or bool(result.get("timed_out"))
-            break
-    return output
+    from workbench.modules.tools.file_queries import search_files as query
+
+    return await query(root, values)
 
 
 def read_file(root: Path, values: dict) -> dict:
+    from workbench.modules.tools.file_queries import FileRead
+
+    values = FileRead.model_validate(values).model_dump()
+    root = root.resolve()
     path = authorized_path(root, values["path"])
     content, version = read_text(path)
     start, end = values["start_line"], values["end_line"]
     if end < start or end - start > 999:
         raise AppError("invalid_line_range", "每次读取不超过 1000 行，结束行须大于等于起始行。")
+    expected = values.get("expected_version")
+    if expected is not None and expected != version:
+        raise AppError("file_version_conflict", "文件在续读前已改变，请重新读取。", 409)
     lines = content.splitlines()
-    selected = "\n".join(f"{i + 1}: {lines[i]}" for i in range(start - 1, min(end, len(lines))))
+    budget = values.get("max_chars", MAX_OUTPUT_BYTES)
+    offset = values.get("start_character", 0)
+    chunks, used, next_read = [], 0, None
+    for index in range(start - 1, min(end, len(lines))):
+        position = offset if index == start - 1 else 0
+        if position > len(lines[index]):
+            raise AppError("invalid_character_offset", "字符位置超出该行，请重新读取。", 422)
+        prefix = f"{index + 1}: " if position == 0 else f"{index + 1}（续）: "
+        remaining = budget - used - len(prefix) - (1 if chunks else 0)
+        if remaining <= 0:
+            next_read = {"start_line": index + 1, "start_character": position}
+            break
+        fragment = lines[index][position : position + remaining]
+        chunks.append(prefix + fragment)
+        used += len(prefix) + len(fragment) + (1 if len(chunks) > 1 else 0)
+        if position + len(fragment) < len(lines[index]):
+            next_read = {"start_line": index + 1, "start_character": position + len(fragment)}
+            break
+    if next_read is None and end < len(lines):
+        next_read = {"start_line": end + 1, "start_character": 0}
+    if next_read is not None:
+        next_read.update(
+            path=values["path"],
+            end_line=max(end, next_read["start_line"] + 199),
+            expected_version=version,
+            max_chars=budget,
+        )
     return {
         "path": str(path.relative_to(root)),
-        "content": selected[:MAX_OUTPUT_BYTES],
+        "content": "\n".join(chunks),
         "version": version,
         "total_lines": len(lines),
-        "truncated": len(selected) > MAX_OUTPUT_BYTES or end < len(lines),
+        "truncated": next_read is not None,
+        "next": next_read,
     }
 
 

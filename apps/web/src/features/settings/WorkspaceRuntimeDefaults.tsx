@@ -16,6 +16,7 @@ import {
   runOptionFields,
   validOption,
   validOverrides,
+  ReviewEffortSelect,
 } from './runtimeOptions'
 import './runtime.css'
 import { SandboxSelect } from './SandboxSelect'
@@ -41,7 +42,7 @@ export function WorkspaceRuntimeDefaults({
     conflict || query.isError || (!!notice && !!editing),
     '工作区任务默认设置需要核对',
   )
-  const [editorOpen, setEditorOpen] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(true)
   useEffect(() => {
     if (conflict) setEditorOpen(true)
   }, [conflict])
@@ -164,8 +165,16 @@ export function WorkspaceRuntimeDefaults({
                   <option value="manual">手动审批</option>
                 </select>
               </label>
-              <details className="runtime-advanced">
+              <details className="runtime-advanced" open>
                 <summary>高级任务预算与执行设置</summary>
+                <ReviewEffortSelect
+                  inherit
+                  value={current.options.review_reasoning_effort}
+                  disabled={busy || conflict}
+                  onChange={(review_reasoning_effort) =>
+                    edit({ ...current.options, review_reasoning_effort })
+                  }
+                />
                 <div className="run-option-fields">
                   {runOptionFields.map((field) => {
                     const inherited = current.options[field.key] == null
@@ -237,7 +246,11 @@ export function WorkspaceRuntimeDefaults({
               </details>
               <Button
                 onClick={() => {
-                  const options: RunOptionOverrides = { sandbox_profile: null, approval_mode: null }
+                  const options: RunOptionOverrides = {
+                    sandbox_profile: null,
+                    approval_mode: null,
+                    review_reasoning_effort: null,
+                  }
                   runOptionFields.forEach((field) => {
                     options[field.key] = null
                   })

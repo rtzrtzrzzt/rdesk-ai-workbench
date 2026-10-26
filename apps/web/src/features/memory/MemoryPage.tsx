@@ -9,6 +9,7 @@ import { Button, EmptyState, Status } from '../../components/ui'
 import { MarkdownEditor, MemoryPageFrame, MemoryScopePicker, MemorySearch } from './ui'
 import type { MemoryScope, MemoryTab } from './ui'
 import { RevisionHistory } from './RevisionHistory'
+import { useSettingsAttention } from '../settings/SettingsGroup'
 
 type Draft = {
   body: string
@@ -717,7 +718,15 @@ function CreateMemoryDialog({
     </Dialog>
   )
 }
-function RulesPanel({ workspace, active }: { workspace: Workspace; active: boolean }) {
+export function RulesPanel({
+  workspace,
+  active,
+  globalOnly = false,
+}: {
+  workspace: Workspace
+  active: boolean
+  globalOnly?: boolean
+}) {
   const client = useQueryClient()
   const [path, setPath] = useState('')
   const [paths, setPaths] = useState<string[]>([])
@@ -736,6 +745,11 @@ function RulesPanel({ workspace, active }: { workspace: Workspace; active: boole
   )
   const dirty = !!draft && draft.body !== draft.original
   useUnsavedWarning(dirty)
+  useSettingsAttention(
+    'global-rules',
+    dirty || !!draft?.conflict || rules.isError,
+    '全局规则有未保存修改或需要核对',
+  )
   async function reload() {
     const latest = await memoryApi.rules(workspace.id, paths)
     client.setQueryData(['memory-rules', workspace.id, paths], latest)
@@ -793,60 +807,66 @@ function RulesPanel({ workspace, active }: { workspace: Workspace; active: boole
   }
   return (
     <>
-      <form
-        className="memory-toolbar memory-rules-filter"
-        onSubmit={(event) => {
-          event.preventDefault()
-          setPaths(path.trim() ? [path.trim()] : [])
-          setSelected('global')
-        }}
-      >
-        <label>
-          适用路径
-          <input
-            value={path}
-            onChange={(event) => setPath(event.target.value)}
-            placeholder="项目相对路径，可选"
-          />
-        </label>
-        <Button type="submit">
-          <RefreshCw size={14} />
-          读取规则来源
-        </Button>
-      </form>
-      <p className="page-note memory-rules-note">
-        全局规则可由你明确编辑；项目与目录 AGENTS.md 只读展示。目录规则只适用于对应路径及其子树。
-      </p>
+      {!globalOnly && (
+        <form
+          className="memory-toolbar memory-rules-filter"
+          onSubmit={(event) => {
+            event.preventDefault()
+            setPaths(path.trim() ? [path.trim()] : [])
+            setSelected('global')
+          }}
+        >
+          <label>
+            适用路径
+            <input
+              value={path}
+              onChange={(event) => setPath(event.target.value)}
+              placeholder="项目相对路径，可选"
+            />
+          </label>
+          <Button type="submit">
+            <RefreshCw size={14} />
+            读取规则来源
+          </Button>
+        </form>
+      )}
+      {!globalOnly && (
+        <p className="page-note memory-rules-note">
+          全局规则可由你明确编辑；项目与目录 AGENTS.md 只读展示。目录规则只适用于对应路径及其子树。
+        </p>
+      )}
       {rules.isError ? (
         <ReadError service error={rules.error} retry={() => void rules.refetch()} />
       ) : rules.isPending ? (
         <p className="page-note">正在读取真实规则来源…</p>
       ) : (
-        <div className="memory-workspace">
-          <div className="memory-document-list" aria-label="规则来源">
-            <button
-              type="button"
-              aria-pressed={selected === 'global'}
-              onClick={() => setSelected('global')}
-            >
-              <strong>用户全局 AGENTS.md</strong>
-              <small>{global?.exists ? '可编辑' : '尚未创建，保存后建立'}</small>
-            </button>
-            {rules.data.rules
-              .filter((rule) => rule.scope !== 'user')
-              .map((rule) => (
-                <button
-                  type="button"
-                  key={rule.source_path}
-                  aria-pressed={selected === rule.source_path}
-                  onClick={() => setSelected(rule.source_path)}
-                >
-                  <strong>{rule.scope === 'project' ? '项目规则' : '目录规则'}</strong>
-                  <small>{rule.source_path}</small>
-                  <small>只读 · 适用 {rule.applies_to}</small>
-                </button>
-              ))}
-          </div>
+        <div className={globalOnly ? 'global-rules-editor' : 'memory-workspace'}>
+          {!globalOnly && (
+            <div className="memory-document-list" aria-label="规则来源">
+              <button
+                type="button"
+                aria-pressed={selected === 'global'}
+                onClick={() => setSelected('global')}
+              >
+                <strong>用户全局 AGENTS.md</strong>
+                <small>{global?.exists ? '可编辑' : '尚未创建，保存后建立'}</small>
+              </button>
+              {rules.data.rules
+                .filter((rule) => rule.scope !== 'user')
+                .map((rule) => (
+                  <button
+                    type="button"
+                    key={rule.source_path}
+                    aria-pressed={selected === rule.source_path}
+                    onClick={() => setSelected(rule.source_path)}
+                  >
+                    <strong>{rule.scope === 'project' ? '项目规则' : '目录规则'}</strong>
+                    <small>{rule.source_path}</small>
+                    <small>只读 · 适用 {rule.applies_to}</small>
+                  </button>
+                ))}
+            </div>
+          )}
           <div className="memory-document-detail">
             {selected === 'global' && global ? (
               <MarkdownEditor

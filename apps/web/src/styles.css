@@ -217,12 +217,14 @@ svg {
 }
 .workspace-selector > svg:first-child {
   color: var(--muted);
+  flex-shrink: 0;
 }
 .workspace-selector > svg:last-child {
   margin-left: auto;
   color: var(--muted);
 }
-.workspace-selector div {
+.workspace-selector > div {
+  flex: 1;
   min-width: 0;
 }
 .workspace-selector span {
@@ -1039,12 +1041,14 @@ input::placeholder {
   border: 0;
   padding: 0;
   background: transparent;
-  width: 138px;
+  width: 100%;
+  min-width: 0;
   font-size: 12px;
   font-weight: 500;
 }
 .workspace-selector .icon-button {
-  margin-left: auto;
+  flex: 0 0 22px;
+  margin-left: 0;
   width: 22px;
   height: 25px;
 }
@@ -1259,9 +1263,6 @@ input::placeholder {
   display: none;
 }
 @media (max-width: 700px) {
-  .workspace-selector select {
-    width: 146px;
-  }
   .messages-scroll {
     padding: 18px;
   }

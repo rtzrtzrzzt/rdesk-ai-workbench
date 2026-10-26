@@ -199,6 +199,9 @@ def _freeze_files(identifier):
         intent = dict(row.intent)
         if intent.get("phase") == "files_frozen":
             return intent
+        intent["run_ids"], intent["retained_generation_run_ids"] = _preserve_generation_runs(
+            db, intent["run_ids"]
+        )
         run_ids, thread_ids = intent["run_ids"], intent["thread_ids"]
         file_runs = list(db.scalars(select(Run).where(Run.id.in_(run_ids), Run.kind == "file")))
         source_uploads = {}
@@ -298,13 +301,41 @@ def _remove_files(intent):
             shutil.rmtree(path)
 
 
+def _preserve_generation_runs(db, run_ids):
+    """Generation history owns its jobs independently of the chat that created them."""
+    from workbench.modules.media.domain import MediaTask
+
+    retained = set(db.scalars(select(MediaTask.run_id).where(MediaTask.run_id.in_(run_ids))))
+    if not retained:
+        return run_ids, []
+    rows = list(db.scalars(select(Run).where(Run.id.in_(run_ids))))
+    while True:
+        descendants = {row.id for row in rows if row.parent_run_id in retained} - retained
+        if not descendants:
+            break
+        retained.update(descendants)
+    ancestors = {row.id: row.parent_run_id for row in rows if row.id in retained}
+    for run in rows:
+        if run.id in retained:
+            # _ready has already required terminal status and actual resource
+            # closure. Preserve media/preview rows and release deleted chat FKs.
+            root_id = run.id
+            while ancestors.get(root_id) in retained:
+                root_id = ancestors[root_id]
+            run.thread_id, run.root_run_id = None, root_id
+            if run.parent_run_id not in retained:
+                run.parent_run_id = None
+            run.version += 1
+    return sorted(set(run_ids) - retained), sorted(retained)
+
+
 def _remove_records(identifier):
     from workbench.modules.automation.domain import (
         AutomationAction,
         AutomationSession,
         DesktopWriterLease,
     )
-    from workbench.modules.collaboration.domain import AgentMessage, AgentSlot
+    from workbench.modules.collaboration.domain import AgentMessage, AgentSlot, AgentTurn
     from workbench.modules.interactions import Approval, Question
     from workbench.modules.mcp.host_domain import ToolExchange
     from workbench.modules.processes.domain import CommandExecution
@@ -338,6 +369,7 @@ def _remove_records(identifier):
                     AgentMessage.to_run_id.in_(run_ids),
                 ),
             ),
+            (AgentTurn, AgentTurn.run_id.in_(run_ids)),
             (AgentSlot, or_(AgentSlot.root_run_id.in_(run_ids), AgentSlot.run_id.in_(run_ids))),
             (Attempt, Attempt.run_id.in_(run_ids)),
         ):
@@ -366,6 +398,7 @@ def _remove_records(identifier):
                     AgentMessage.to_run_id.in_(run_ids),
                 ),
             ),
+            (AgentTurn, AgentTurn.run_id.in_(run_ids)),
             (AgentSlot, or_(AgentSlot.root_run_id.in_(run_ids), AgentSlot.run_id.in_(run_ids))),
             (UsageRecord, UsageRecord.run_id.in_(run_ids)),
             (Attempt, Attempt.run_id.in_(run_ids)),
@@ -398,9 +431,14 @@ def _remove_records(identifier):
         db.execute(delete(Thread).where(Thread.id.in_(thread_ids)))
         deletion.status, deletion.message = (
             "completed",
-            "会话及后代已永久删除；原始文件与独立记忆已保留。",
+            "会话及后代对话已永久删除；生成记录、原始文件与独立记忆已保留。",
         )
-        deletion.intent = {"thread_ids": thread_ids, "run_ids": run_ids, "phase": "completed"}
+        deletion.intent = {
+            "thread_ids": thread_ids,
+            "run_ids": run_ids,
+            "retained_generation_run_ids": intent.get("retained_generation_run_ids", []),
+            "phase": "completed",
+        }
 
 
 async def maintain():
@@ -417,7 +455,7 @@ async def maintain():
             ready = await asyncio.to_thread(_ready, identifier)
             if ready is None:
                 continue
-            scope, sessions = ready
+            _, sessions = ready
             from workbench.modules.automation.forget import forget_closed_session
 
             for session in sessions:
@@ -428,7 +466,7 @@ async def maintain():
                 dsn, connect_timeout=3, options="-c lock_timeout=5000 -c statement_timeout=30000"
             )
             async with AsyncPostgresSaver.from_conn_string(dsn) as saver:
-                for run_id in scope["run_ids"]:
+                for run_id in intent["run_ids"]:
                     await saver.adelete_thread(run_id)
             await asyncio.to_thread(_remove_files, intent)
             await asyncio.to_thread(_remove_records, identifier)

@@ -1,6 +1,6 @@
 # 第三方软件与许可证说明
 
-核对日期：2026-10-17。本文件记录当前 `uv.lock`、`apps/web/package-lock.json` 的版本和已安装包的实际许可元数据；它不是将第三方代码重新授权为 Apache-2.0 的声明。
+基础许可核对日期：2026-10-17；后续新增来源按各节记录。本文保留对应锁定版本及已安装包的实际许可元数据，1.0.0文档同步未重新进行全量上游许可审阅，也未改变第三方版本；它不是将第三方代码重新授权为 Apache-2.0 的声明。
 
 ## 项目许可证与范围
 
@@ -95,7 +95,7 @@ AI工作台的原创源码、脚本、配置及随附文档采用 **Apache Licen
 | [python-pptx](https://pypi.org/pypi/python-pptx/1.0.2/json) | 1.0.2 | MIT | 直接 |
 | [pywin32](https://pypi.org/pypi/pywin32/312/json) | 312 | PSF（PyPI 元数据；本机未安装） | 间接；本机未安装 |
 | [pywin32-ctypes](https://pypi.org/pypi/pywin32-ctypes/0.2.3/json) | 0.2.3 | BSD-3-Clause | 间接；本机未安装 |
-| [pyyaml](https://pypi.org/pypi/pyyaml/6.0.3/json) | 6.0.3 | MIT | 间接 |
+| [pyyaml](https://pypi.org/pypi/pyyaml/6.0.3/json) | 6.0.3 | MIT | 直接；扩展元数据解析复用既有锁定包 |
 | [referencing](https://pypi.org/pypi/referencing/0.37.0/json) | 0.37.0 | MIT | 间接 |
 | [requests](https://pypi.org/pypi/requests/2.34.2/json) | 2.34.2 | Apache-2.0 | 间接 |
 | [requests-toolbelt](https://pypi.org/pypi/requests-toolbelt/1.0.0/json) | 1.0.0 | Apache 2.0 | 间接 |
@@ -298,10 +298,14 @@ AI工作台的原创源码、脚本、配置及随附文档采用 **Apache Licen
 
 可选ASR另使用 **Whisper tiny多语言 GGML** `ggml-tiny.bin`，来自维护者 `ggerganov/whisper.cpp`，固定revision `5359861c739e955e79d9a303bcbc70fb988958b1`，实际 **77,691,713B**。该[固定转换模型卡](https://huggingface.co/ggerganov/whisper.cpp/blob/5359861c739e955e79d9a303bcbc70fb988958b1/README.md)标注 **MIT**；[原OpenAI Whisper固定README](https://github.com/openai/whisper/blob/86098128c0b4f24f0e2aa2994de830614b474227/README.md#license)明确代码和权重均按MIT发布，[原LICENSE](https://github.com/openai/whisper/blob/86098128c0b4f24f0e2aa2994de830614b474227/LICENSE)版权为 `Copyright (c) 2022 OpenAI`，原文保存在私有模型目录 `LICENSE.openai-whisper`。权重未纳入Git源码或统一Apache授权，应用不自动下载；按用户显式授权准备的收据为 `.local/asr/model-source.json`。本机真实ASR页面已完成转录与下载，但不是识别准确率基准。该tiny的MIT证据不适用于Flash-Next或其他模型；若另行分发引擎或tiny权重，须随附其完整MIT版权/许可及适用的第三方声明。
 
-SGLang、PyTorch、FlashInfer 等模型运行软件位于独立 `.runtime/model-env/`，不属于根 `uv.lock` 的应用依赖集合；其软件许可与模型权重许可分别适用。CUDA、NVIDIA 驱动及相关库有各自条款，不能从某个开源推理引擎的许可推导出整个 GPU 环境或模型权重的许可。
+SGLang、PyTorch、FlashInfer 等模型运行软件位于独立 `.runtime/model-env/`，本机FLUX使用独立 `.runtime/media-env/`及[runtime/media/requirements.txt](runtime/media/requirements.txt)；这些不是根 `uv.lock` 的应用依赖集合，其软件许可与模型权重许可分别适用。CUDA、NVIDIA 驱动及相关库有各自条款，不能从某个开源推理引擎的许可推导出整个 GPU 环境或模型权重的许可。
 
 ## 保留与再分发
 
 当前交付范围是原创源码及锁文件，第三方安装目录与用户已装原生工具未打入 Git。自行制作带 Python wheel、前端 bundle、原生工具或模型的安装包时，应按实际纳入内容附带第三方的完整许可证、版权声明及所需 NOTICE，并履行适用的 LGPL/MPL/GPL/AGPL 源码等义务；本表和上游网址不能替代这些随包材料。保留上游既有的许可/来源文件；不删除或覆盖其版权，不把本机已有程序描述为本项目下载或捆绑的软件。
 
 本文件只对上述锁定版本与已有真实来源作许可记录，不表示已经完成其他平台安装包、未来版本、模型全部用途或实际发布制品的逐项法律审阅。
+
+## BFL FLUX 3 Image Klein参考实现
+
+本项目`scripts/media/flux_phase.py`的flow-map采样流程改编自Black Forest Labs参考实现（Apache-2.0），固定commit `bfc8889a4497f846416f253a3972a1941ac698b9`；来源为2026-10-19生成能力阶段，后续内存优化没有更换该上游修订。上游源代码、版权与许可证见[固定参考实现](https://github.com/black-forest-labs/flux-3-image-klein/tree/bfc8889a4497f846416f253a3972a1941ac698b9)。权重及其许可证单独管理，HF配置/权重固定revision为`337337621b8526e120f2275d250242f4a6bedd75`，不随本项目源码分发；实际环境与用途边界见[本机生成环境](runtime/media/README.md)。

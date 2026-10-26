@@ -47,6 +47,8 @@ def activity(db, run):
     from workbench.modules.runs.domain import Attempt
     from workbench.modules.tools.domain import Operation
 
+    if run.status == "failed" and (run.error or {}).get("code") == "resource_cleanup_unconfirmed":
+        return "cleanup_unconfirmed"
     if run.status != "running":
         return None
     if db.scalar(
@@ -62,6 +64,32 @@ def activity(db, run):
     return None
 
 
+def timing(db: Session, run: Run) -> dict | None:
+    observed_at = now()
+    finished_at = None
+    if run.status in TERMINAL_STATUSES:
+        finished_at = db.scalar(
+            select(RunEvent.created_at)
+            .where(
+                RunEvent.run_id == run.id,
+                RunEvent.type == "run.state_changed",
+                RunEvent.payload["status"].astext == run.status,
+            )
+            .order_by(RunEvent.seq.desc())
+            .limit(1)
+        )
+        # A missing historical boundary is unknown, never the time of this read.
+        if finished_at is None:
+            return None
+    return {
+        "elapsed_ms": max(
+            0, int(((finished_at or observed_at) - run.created_at).total_seconds() * 1000)
+        ),
+        "observed_at": observed_at,
+        "finished_at": finished_at,
+    }
+
+
 def view(db: Session, run: Run) -> dict:
     questions = db.scalars(select(Question).where(Question.run_id == run.id))
     approvals = db.scalars(select(Approval).where(Approval.run_id == run.id))
@@ -71,8 +99,11 @@ def view(db: Session, run: Run) -> dict:
         "thread_id": run.thread_id,
         "status": run.status,
         "model_connection_id": run.model_connection_id,
-        "reasoning_effort": run.config_snapshot.get("generation_overrides", {}).get(
-            "reasoning_effort"
+        "reasoning_effort": (
+            "disabled"
+            if run.config_snapshot.get("generation_overrides", {}).get("thinking_mode")
+            == "disabled"
+            else run.config_snapshot.get("generation_overrides", {}).get("reasoning_effort")
         ),
         "root_run_id": run.root_run_id,
         "parent_run_id": run.parent_run_id,
@@ -80,10 +111,12 @@ def view(db: Session, run: Run) -> dict:
             "state_artifact_id"
         ),
         "created_at": run.created_at,
+        "timing": timing(db, run),
         "last_event_seq": run.last_event_seq,
         "error": run.error,
         "paused_reason": run.config_snapshot.get("safety", {}).get("paused_reason"),
         "activity": activity(db, run),
+        "plan": run.config_snapshot.get("task_plan"),
         "questions": [question_view(q) for q in questions],
         "approvals": [approval_view(a) for a in approvals],
     }
@@ -138,6 +171,10 @@ def set_status(db: Session, run: Run, status: str) -> None:
     run.status = status
     db.flush()
     emit(db, run.id, "run.state_changed", {"status": status})
+    if status in TERMINAL_STATUSES:
+        from workbench.modules.collaboration.service import notify_finished
+
+        notify_finished(db, run)
 
 
 def request_lock_key(user_id: str, request_id: str) -> int:
@@ -277,6 +314,9 @@ def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
             revision.configuration, values.get("reasoning_effort")
         )
         options = defaults.options.model_dump(mode="json")
+        from workbench.modules.extensions.service import freeze as freeze_extensions
+
+        extensions = freeze_extensions(db, user_id, thread.workspace_id)
         run = Run(
             id=new_id(),
             user_id=user_id,
@@ -293,6 +333,7 @@ def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
                 "model_version": model.version,
                 "model_revision_id": revision.id,
                 "generation_overrides": generation_overrides,
+                "extensions": extensions,
                 "max_output_tokens": revision.configuration["generation"]["max_output_tokens"],
                 "runtime_options": options,
                 "runtime_options_sources": defaults.sources,
@@ -321,9 +362,9 @@ def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
             )
         )
         db.add(Job(run_id=run.id, available_at=now()))
-        if thread.title == "新对话":
-            thread.title = values["input"].strip()[:40]
-            thread.version += 1
+        from workbench.modules.conversation_naming import initialize
+
+        initialize(thread, run)
         emit(db, run.id, "run.accepted", {"status": "queued"})
         return view(db, run)
 
@@ -394,6 +435,50 @@ def has_children_running(db, run_id):
     )
 
 
+def finish_unconfirmed_cleanup(db, run, job):
+    """End cancelled agent execution while retaining its abandoned resource ledger."""
+    from workbench.modules.mcp.store import has_pending_transport_cleanup
+    from workbench.modules.runs.domain import Attempt, Step
+    from workbench.modules.runs.resources import command_cleanup_unconfirmed
+    from workbench.modules.tools.domain import Operation
+
+    if (
+        run.kind != "agent"
+        or run.status in TERMINAL_STATUSES
+        or not run.cancel_requested_at
+        or has_children_running(db, run.id)
+        or has_pending_transport_cleanup(db, run.id)
+        or not command_cleanup_unconfirmed(db, run.id)
+    ):
+        return False
+    reason = {
+        "code": "resource_cleanup_unconfirmed",
+        "message": (
+            "本轮执行已中止，可以继续发送消息。命令执行器已退出，但资源关闭尚未完整确认；"
+            "未知资源继续保留记录并占用名额，不会重放原命令。"
+        ),
+    }
+    for operation in db.scalars(
+        select(Operation).where(Operation.run_id == run.id, Operation.status == "running")
+    ):
+        operation.status, operation.effect_status = "outcome_unknown", "needs_reconciliation"
+        operation.result = {**(operation.result or {}), "error": reason}
+        emit(db, run.id, "tool.outcome_unknown", {"operation_id": operation.id})
+    for attempt in db.scalars(
+        select(Attempt).where(Attempt.run_id == run.id, Attempt.status == "running")
+    ):
+        attempt.status, attempt.finished_at, attempt.error = "interrupted", now(), reason
+    for step in db.scalars(select(Step).where(Step.run_id == run.id, Step.status == "running")):
+        step.status = "cancelled"
+    run.error = reason
+    emit(db, run.id, "error.reported", reason)
+    set_status(db, run, "failed")
+    invalidate_waits(db, run.id)
+    job.status, job.completion_status = "finished", "failed"
+    job.lease_owner, job.lease_until = None, None
+    return True
+
+
 def request_stop(db, run):
     from workbench.modules.mcp.store import request_transport_cleanup
     from workbench.modules.runs.resources import request_native_cleanup as request_cleanup
@@ -407,6 +492,8 @@ def request_stop(db, run):
     if job:
         job.completion_status = "cancelled"
     if job is not None and job.status != "running":
+        if finish_unconfirmed_cleanup(db, run, job):
+            return
         if retained or has_children_running(db, run.id):
             set_status(db, run, "cancelling")
             job.status = "cleanup"
@@ -478,6 +565,10 @@ def decide_approval(db: Session, user_id: str, approval_id: str, values: dict) -
         )
         if run.status in TERMINAL_STATUSES or approval.status != "pending":
             raise AppError("approval_resolved", "授权请求已处理或失效。", 409)
+        if run.config_snapshot.get("runtime_options", {}).get("approval_mode") == "smart":
+            raise AppError(
+                "automatic_approval", "此任务使用智能审批，由自动审核器决定允许或拒绝。", 409
+            )
         if approval.version != values["version"]:
             raise AppError("approval_stale", "操作已经更新，请重新核对。", 409)
         approval.approved = values["approved"]

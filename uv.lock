@@ -8,7 +8,7 @@ resolution-markers = [
 
 [[package]]
 name = "ai-workbench"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
@@ -30,6 +30,7 @@ dependencies = [
     { name = "pypdf" },
     { name = "python-docx" },
     { name = "python-pptx" },
+    { name = "pyyaml" },
     { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
@@ -68,6 +69,7 @@ requires-dist = [
     { name = "pypdf", specifier = ">=6.21,<7" },
     { name = "python-docx", specifier = ">=1.2,<2" },
     { name = "python-pptx", specifier = ">=1.0.2,<2" },
+    { name = "pyyaml", specifier = "==6.0.3" },
     { name = "sqlalchemy", specifier = ">=2.0,<3" },
     { name = "uvicorn", specifier = ">=0.30,<1" },
 ]

@@ -5,8 +5,10 @@ from typing import Any, Literal
 
 from workbench.contracts.base import PublicResponse
 from workbench.modules.credentials.dto import VaultView
+from workbench.modules.extensions.dto import ExtensionView
 from workbench.modules.files.dto import FileTask
 from workbench.modules.mcp.host_dto import MCPView, SnapshotView
+from workbench.modules.media.dto import MediaConnectionView, MediaDeletionResult, MediaTaskView
 from workbench.modules.models.profile import Capability, Generation
 
 
@@ -45,6 +47,8 @@ class Thread(PublicResponse):
     id: str
     workspace_id: str
     title: str
+    title_source: str = "legacy"
+    title_naming: dict = {}
     parent_thread_id: str | None = None
     fork_message_id: str | None = None
     created_at: datetime
@@ -87,6 +91,12 @@ class Message(PublicResponse):
     forkable: bool = False
 
 
+class ReasoningChoice(PublicResponse):
+    value: str
+    label: str
+    kind: str
+
+
 class ModelConnection(PublicResponse):
     id: str
     name: str
@@ -100,7 +110,8 @@ class ModelConnection(PublicResponse):
     capabilities: dict[str, Capability]
     adapter_routes: dict[str, dict]
     generation: Generation
-    reasoning_efforts: list[Literal["low", "medium", "high", "xhigh"]]
+    reasoning_efforts: list[str]
+    reasoning_choices: list[ReasoningChoice] = []
     version: int
 
 
@@ -138,21 +149,29 @@ class RunError(PublicResponse):
     message: str
 
 
+class RunTiming(PublicResponse):
+    elapsed_ms: int
+    observed_at: datetime
+    finished_at: datetime | None
+
+
 class Run(PublicResponse):
     id: str
     kind: str
     thread_id: str | None
     status: str
     model_connection_id: str | None
-    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort: str | None = None
     root_run_id: str | None
     parent_run_id: str | None
     state_artifact_id: str | None
     created_at: datetime
+    timing: RunTiming | None = None
     last_event_seq: int
     error: RunError | None
     paused_reason: RunError | None = None
     activity: str | None = None
+    plan: dict[str, Any] | None = None
     questions: list[Question]
     approvals: list[Approval]
 
@@ -231,6 +250,10 @@ RequestResult = (
     | SnapshotView
     | VaultView
     | CommandReceipt
+    | ExtensionView
+    | MediaConnectionView
+    | MediaTaskView
+    | MediaDeletionResult
     | None
 )
 

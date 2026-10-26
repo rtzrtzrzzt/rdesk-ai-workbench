@@ -23,6 +23,7 @@ def item_view(row):
         "run_id": row.run_id,
         "error": row.error,
         "created_at": row.created_at,
+        "has_attachments": bool(row.payload.get("attachments")),
     }
 
 
@@ -248,6 +249,59 @@ def resume(db, user_id, thread_id, request_id):
         return view(db, user_id, thread_id)
 
     return idempotent(db, user_id, request_id, f"thread:{thread_id}:queue:resume", {}, execute)
+
+
+def steer_queued(db, user_id, thread_id, item_id, values):
+    def execute():
+        from workbench.modules.collaboration.service import steer
+
+        # Use the same Thread -> item -> Run order as queue dispatch. Receiving
+        # the input and consuming the queue item must commit together.
+        thread = get_thread(db, user_id, thread_id, lock=True)
+        ensure_writable(thread)
+        row = db.scalar(
+            select(QueuedInput)
+            .where(QueuedInput.id == item_id, QueuedInput.thread_id == thread.id)
+            .with_for_update()
+        )
+        if row is None or row.status == "dispatched":
+            raise AppError("queue_item_dispatched", "消息已发送或已移除，请刷新队列。", 409)
+        if row.version != values["version"]:
+            raise AppError("queue_item_stale", "消息已改变，请重新查看后操作。", 409)
+        if row.payload.get("attachments"):
+            raise AppError(
+                "steering_attachments_unsupported",
+                "带附件的消息请保留在队列中；当前引导仅支持文字，附件未被移除。",
+                422,
+            )
+        run_id = db.scalar(
+            select(Run.id).where(
+                Run.id == values["run_id"],
+                Run.thread_id == thread.id,
+                Run.user_id == user_id,
+                Run.parent_run_id.is_(None),
+                Run.kind == "agent",
+            )
+        )
+        if run_id is None:
+            raise AppError("run_not_found", "当前任务已变化，请刷新后重试；消息仍在队列中。", 409)
+        received = steer(
+            db,
+            user_id,
+            run_id,
+            {
+                "input": row.payload["input"],
+                "request_id": str(uuid5(UUID(values["request_id"]), "queue-steering")),
+            },
+        )
+        row.status, row.run_id, row.error = "dispatched", run_id, None
+        row.version += 1
+        db.flush()
+        return {"queue": view(db, user_id, thread_id), "run_id": run_id, "input_id": received["id"]}
+
+    return idempotent(
+        db, user_id, values["request_id"], f"queue:{item_id}:steer", values, execute
+    )
 
 
 def maintain(db):

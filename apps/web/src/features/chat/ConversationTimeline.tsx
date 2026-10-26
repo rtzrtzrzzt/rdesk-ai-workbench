@@ -6,6 +6,8 @@ import { api } from '../../api/workbench'
 import type { ActivityItem, Message, Run } from '../../api/types'
 import { Button } from '../../components/ui'
 import { runLabel, runTerminal } from './runState'
+import { RunDuration } from './RunDuration'
+import { InlineMediaTask } from './InlineMediaTask'
 
 function ResultPreview({ result }: { result: Record<string, unknown> }) {
   const sources = Array.isArray(result.results)
@@ -59,19 +61,26 @@ function ResultPreview({ result }: { result: Record<string, unknown> }) {
 function ToolActivity({
   item,
   threadId,
+  workspaceId,
   live,
 }: {
   item: ActivityItem
   threadId: string
+  workspaceId: string
   live: boolean
 }) {
   const [open, setOpen] = useState(false)
-  const ongoing = ['created', 'running', 'pending'].includes(item.status)
-  const failed = item.status === 'failed' || item.effect_status === 'outcome_unknown'
+  const ongoing = ['preparing', 'created', 'running', 'pending', 'waiting_input'].includes(
+    item.status,
+  )
+  const failed =
+    item.status === 'failed' ||
+    item.status === 'outcome_unknown' ||
+    ['outcome_unknown', 'needs_reconciliation'].includes(item.effect_status)
   const details = useQuery({
     queryKey: ['tool-details', threadId, item.id],
     queryFn: ({ signal }) => api.activityDetails(threadId, item.id, signal),
-    enabled: open,
+    enabled: open && item.details_available !== false,
     refetchInterval: open && live && ongoing ? 2500 : false,
   })
   const Icon = failed
@@ -81,13 +90,14 @@ function ToolActivity({
       : item.status === 'succeeded'
         ? Check
         : Wrench
+  const Heading = item.details_available === false ? 'div' : 'button'
   return (
     <section className={`tool-activity ${failed ? 'tool-failed' : ''}`} data-operation-id={item.id}>
-      <button
+      <Heading
         className="tool-activity-heading"
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        {...(item.details_available === false
+          ? { role: 'status' }
+          : { type: 'button' as const, 'aria-expanded': open, onClick: () => setOpen(!open) })}
       >
         <Icon size={14} className={ongoing && live ? 'activity-spin' : ''} />
         <span className="tool-activity-title">{item.title}</span>
@@ -97,15 +107,23 @@ function ToolActivity({
           </span>
         )}
         <small>
-          {item.effect_status === 'outcome_unknown'
+          {item.status === 'outcome_unknown' ||
+          ['outcome_unknown', 'needs_reconciliation'].includes(item.effect_status)
             ? '结果待核对'
             : ongoing && !live
               ? '尚未完成'
-              : runLabel(item.status)}
+              : item.status === 'preparing'
+                ? '正在准备内容'
+                : item.status === 'running'
+                  ? '正在执行'
+                  : runLabel(item.status)}
         </small>
-        <ChevronRight size={13} className={open ? 'expanded' : ''} />
-      </button>
+        {item.details_available !== false && (
+          <ChevronRight size={13} className={open ? 'expanded' : ''} />
+        )}
+      </Heading>
       {item.error && <p className="tool-activity-error">{item.error}</p>}
+      {item.media_run_id && <InlineMediaTask workspaceId={workspaceId} runId={item.media_run_id} />}
       {open && (
         <div className="tool-activity-details">
           {details.isError ? (
@@ -145,12 +163,14 @@ function ToolActivity({
 /** Messages and tools share persisted timestamps, including branch-safe history. */
 export function ConversationTimeline({
   threadId,
+  workspaceId,
   messages,
   runs,
   renderMessage,
   renderRun,
 }: {
   threadId: string
+  workspaceId: string
   messages: Message[]
   runs: Run[]
   renderMessage: (message: Message) => ReactNode
@@ -170,7 +190,9 @@ export function ConversationTimeline({
   const items = useMemo(() => {
     const tools = [
       ...new Map(
-        activity.data?.pages.flatMap((page) => page.items).map((item) => [item.id, item]) ?? [],
+        activity.data?.pages
+          .flatMap((page) => [...page.items, ...(page.preparing ?? [])])
+          .map((item) => [item.id, item]) ?? [],
       ).values(),
     ]
     return [
@@ -198,6 +220,12 @@ export function ConversationTimeline({
   items.forEach((item, index) => {
     if (item.runId) lastIndex.set(item.runId, index)
   })
+  const footer = (run: Run) => (
+    <>
+      {renderRun?.(run)}
+      {run.kind === 'agent' && <RunDuration run={run} />}
+    </>
+  )
   return (
     <>
       {activity.hasNextPage && (
@@ -223,25 +251,26 @@ export function ConversationTimeline({
             <ToolActivity
               item={item.tool}
               threadId={threadId}
+              workspaceId={workspaceId}
               live={
                 live &&
                 !runTerminal.has(runs.find((run) => run.id === item.runId)?.status ?? 'succeeded')
               }
             />
           ) : null}
-          {renderRun &&
-            item.runId &&
+          {item.runId &&
             lastIndex.get(item.runId) === index &&
             (() => {
               const run = runs.find((run) => run.id === item.runId)
-              return run ? renderRun(run) : null
+              return run ? footer(run) : null
             })()}
         </Fragment>
       ))}
-      {renderRun &&
-        runs
-          .filter((run) => !lastIndex.has(run.id))
-          .map((run) => <Fragment key={run.id}>{renderRun(run)}</Fragment>)}
+      {runs
+        .filter((run) => !lastIndex.has(run.id))
+        .map((run) => (
+          <Fragment key={run.id}>{footer(run)}</Fragment>
+        ))}
     </>
   )
 }

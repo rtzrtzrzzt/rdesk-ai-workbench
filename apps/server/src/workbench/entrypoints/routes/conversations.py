@@ -75,6 +75,15 @@ def queue_update(thread_id: UUID, item_id: UUID, command: dto.QueueUpdate, db: D
     return result
 
 
+@router.post("/threads/{thread_id}/queue/{item_id}/steer", response_model=dto.QueueSteered)
+def queue_steer(thread_id: UUID, item_id: UUID, command: dto.QueueSteer, db: DB, user: USER):
+    result = queue.steer_queued(
+        db, user.id, str(thread_id), str(item_id), command.model_dump(mode="json")
+    )
+    db.commit()
+    return result
+
+
 @router.post("/threads/{thread_id}/configuration", response_model=dto.Thread)
 def rename(thread_id: UUID, command: dto.ThreadRename, db: DB, user: USER):
     result = lifecycle.rename(db, user.id, str(thread_id), command.model_dump(mode="json"))

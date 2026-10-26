@@ -26,7 +26,7 @@ function directionLabel(value: string | undefined) {
 }
 function AdapterRoutes({ model }: { model: ModelConnection }) {
   return (
-    <details className="model-adapter-routes">
+    <details className="model-adapter-routes" open>
       <summary>协议适配路线与限制</summary>
       <p className="page-note">
         这是工作台已实现的协议路线。模型支持声明、启用状态和验证证据独立，不会因路线可用而自动启用模型能力。
@@ -116,7 +116,7 @@ export function Capabilities({
     }
   }
   return (
-    <details className="model-capabilities">
+    <details className="model-capabilities" open>
       <summary>能力与证据</summary>
       <p className="page-note">
         连接在线仅说明服务可访问。能力方向、模型支持声明、启用状态与验证证据分别记录。
@@ -148,7 +148,7 @@ export function Capabilities({
         导入已验证的本机部署证据
       </Button>
       <p className="page-note">仅导入与当前端点和模型精确匹配的受管部署证据。</p>
-      <details>
+      <details open>
         <summary>手动声明能力</summary>
         <form
           className="stacked-form"

@@ -1,8 +1,34 @@
 # 工具系统、权限边界与故障恢复技术规格
 
+1.0.0 当前已实现85个内置工具，覆盖文件、命令、配置、历史、协作、记忆、浏览器与生成等分类；发现可用性仍依赖当前连接、组件和权限。最新接口范围及真实证据见[状态第22节](../implementation-status.md#22-2026-10-26-跨对话读取与-ai-操作说明)。当前AI操作流程与完整工具名称索引见[AI说明书](../ai-guide.md)。`read_workbench_guide`提供固定公开说明的版本化分段读取；`list_conversations/search_conversations/read_conversation`提供用户实时允许范围内的对话目录、关键词定位及按消息/字符续读。默认当前工作区，账户跨工作区须用户设置，子Agent限任务树；来源片段再次注入前复核，不自动读图或启动原任务。
+
 > 本文保留工具系统的完整设计约束，当前目录、参数和可执行能力以 `modules/tools/registry.py`、DTO 及相应模块说明为准；尖括号仍为占位符。已有实现、审查修复和实际工具验收见[状态清单](../implementation-status.md)，规划中的通用恢复接口不自动成为现有 HTTP 路由。
 >
 > 适用基线：单人、多工作区、局域网访问，预留多人身份边界；React / TypeScript / Vite + FastAPI + PostgreSQL，LangGraph 是唯一 agent 运行时；Linux、Windows、macOS 原生部署设计，DGX Spark ARM64 / 128GB 统一内存优先实测，其余平台逐项验收。Docker 仅是个别执行沙箱的可选项。
+
+2026-10-19工具补齐实现（下文拟定名称仍是设计术语，实际调用用下表）：
+
+| 实际工具 | 新增行为与限制 |
+| --- | --- |
+| `discover_tools` | 按用途/模块查询和分页；筛选查询自动增量加载当前页最多6个尚未加载的可用schema，纯目录查询只读；显式名称加载及replace/remove仍保留，返回真实可用条件及检查入口 |
+| `find_files` / `search_files` | glob定位、字面量/正则、大小写、上下文及游标；沿用工作区/规则/符号链接边界与真实rg预算 |
+| `read_file` / `read_files` | 明确起止行、长行字符偏移、版本化续读；批读共用输出预算 |
+| `edit_files` | 按文件版本先检查完整批次，再在已有文件锁下逐项原子写；不承诺跨文件事务，异常返回实际已完成部分 |
+| `list_artifacts` / `read_artifact` | 名称过滤、稳定分页、长行字符续读和内容版本；真实Artifact ID与任务ID严格区分 |
+| `read_plan` / `update_plan` | 持久步骤、版本和当前步骤；聊天展示，压缩后继续注入 |
+| `inspect_file_processors` / `process_file` / `cancel_file_task` | 复用已有提取/OCR/转写/转换，自动等待file Worker后交真实结果；缺组件如实不可用 |
+| `code_intelligence` | capabilities、定义、引用、符号、诊断；TS/JS复用本地TypeScript，通用LSP仅用可信设置中的命令；当前Ruff提供Python诊断，Python定义/引用仍缺服务器 |
+| `read_notebook` / `edit_notebook` | 按单元格读取、版本化插入/替换/删除/移动；保留无关内容，不执行Notebook内核 |
+| `mcp_list_resources` / `mcp_list_resource_templates` / `mcp_read_resource` | 绑定连接与快照、分页和内容版本；URI不扩大本地/网络权限，正文作为不可信内容 |
+| `start_command` / `write_command_input` | 可选Linux PTY、24×80、合并输出及受审输入/EOF；复用命令日志/预算/停止/完整回收，未知输入不重发；bwrap交互明确不支持 |
+| `list_commands` | 核对当前任务活动命令、并发上限及剩余名额；其他任务仅提供占用数量；默认每任务2/整机4，未知资源继续占位 |
+| `discover_settings` / `read_settings` / `preview_settings` / `configure_settings` / `settings_receipt` | 设置目录、当前值、只读候选校验、受控保存与回执；范围及专用维护入口见[配置接口](ai-configuration.md) |
+
+以上已通过本机真实浏览器、固定本地Qwen及实际Worker链路验收，具体证据和组件边界见[状态第17节](../implementation-status.md#17-2026-10-19-工具补齐设置接口与交互改进)。旧工具操作重放保留原已批准参数，不因新增默认字段改变摘要。文件处理在创建时原子设置父/根任务，父任务授权事件记录在父Run，完成后交还真实产物。
+
+2026-10-19命令预算实现：`exec_command`与`start_command`统一使用冻结的`RunOptions.command_timeout_seconds`（默认3600秒，可配置1..86400）。工具省略/null继承，显式时限不能超任务预算；工具schema同步声明实际上限，审批前归一化，旧操作重放不延长已审时限。普通命令等待真实终态，需即时句柄/进度的任务复用`start_command`、`read_command_output`与`stop_command`；按同一ID和游标观察，不重跑，日志EOF不等于进程结束。合法活动态轮询使用嵌套命令回执判断；参数校验仅反馈安全字段和范围，不回显输入值或任意未知字段名。运行超时、取消与结果未知仍保持现有资源清理和不重放边界。
+
+2026-10-20命令并发与停止增量：`exec_command`和`start_command`共享整机准入，限额由应用配置控制。满额在准入事务外核对一次真实关闭回执，仍满额时反馈`command_capacity`及当前任务占位、统计、处理指引和`not_started=true`，不隐式排队或自动重发。配置与资源判据见[命令模块](../../apps/server/src/workbench/modules/processes/README.md)。用户取消后，若剩余命令均为有效终态unknown且执行器已退出、无其他活动资源，则以`failed/resource_cleanup_unconfirmed`结束对话执行，明确显示资源待核对；未知命令仍保留账本与名额、继续独立对账并阻止数据删除。这不代表资源已关闭，不放开运行中或身份核验失败的资源。
 
 ## 目录
 
@@ -157,7 +183,7 @@ Git 查看状态、差异、日志可以只读执行；checkout、reset、clean�
 | 拟定工具 | 能力 | 强制规则 |
 | --- | --- | --- |
 | `tasks.plan / update` | 步骤、依赖、进度与交付物引用 | 计划完成不替代真实执行与验收事实 |
-| `tasks.spawn` | 子任务说明、读写归属、模型配置、预算、父 run | 最多 3 个活跃子 agent，初始深度 1；后端限制，不靠提示词 |
+| `tasks.spawn` | 子任务说明、读写归属、模型配置、预算、父 run | 最多3个未释放子agent身份，深度1；后端限制，不靠提示词 |
 | `tasks.message` | 同任务树内部协作消息 | 不等于向外部人员发送邮件/即时消息 |
 | `tasks.inspect / wait` | 查询、等待已有任务 | 等待释放生成槽位，不通过轮询反复创建子任务 |
 | `tasks.cancel` | 停止子任务或任务树 | 传播到模型、工具、进程和资源 |
@@ -165,6 +191,8 @@ Git 查看状态、差异、日志可以只读执行；checkout、reset、clean�
 | `user.request_approval` | 具体动作、目标、权限差额、有效期 | 持久 approval；与普通问题独立，模型不能自行同意 |
 
 活跃子 agent 上限与模型生成并发独立。Spark 初始生成并发为 1；可有多个子任务等待资源，但不因此同时加载/生成 3 份大模型请求。计数口径遵循运行时契约；父预算覆盖全部子任务，子任务不各自得到无限额度。
+
+当前协作工具为 spawn_agent、inspect_agents、send_agent_message、wait_agents、wait_agent_message、followup_agent、interrupt_agent/cancel_agent、release_agent。消息工具的 agent_id 支持主任务的子 agent UUID，以及子任务使用的 parent；后者不能用于控制或兄弟通信。普通消息仅投递到已有执行轮，不自动为已完成 agent 开新轮；明确 followup 才启动下一轮。需要回复时使用真实 reply_to_id。等待超时只报告真实状态，不视为收到答复；中断请求不等于资源关闭。会话允许多轮，但每个根任务仍最多3个未释放身份、深度1，共享根预算及原模型许可。
 
 共享同一项目或底层目录的自动写入统一单写者，即使从不同 workspace 引用也不能绕开。键以规范化资源身份确定，不只看 workspace_id。子 agent 写代码优先独立 worktree，由主 agent 整合；无 Git 时排队。worktree 仍可能共享端口、数据库或桌面，需各自资源租约。用户手工编辑不受自动租约限制，提交前必须再次校验版本。
 
@@ -591,7 +619,7 @@ SSE 重连带已确认游标，重新鉴权后补发。前端按 event_id 或 ru
 
 ## 13. 关键场景与验收要求
 
-以下是实施阶段验收设计，**没有执行这些测试，也没有真实产品验收结果**。复用已有框架，按实际风险验证，不引入无关重型测试系统。
+以下保留2026-10-17制定的工具与故障验收设计。1.0.0 已有多轮真实浏览器、本地Qwen与实际Worker链路证据，完成范围和仍未覆盖的故障条件见[状态清单](../implementation-status.md)；本表不作为全部已通过的声明。复用已有框架，按实际风险验证，不因文档同步重新运行有效的旧检查。
 
 通用创建去重、SSE 恢复、模型能力不匹配和平台覆盖统一使用[真实 UI 核心验收矩阵](deployment-and-validation.md#113-真实-ui-核心验收矩阵)中的 U05/U06、U09 及对应平台记录；下表仅补充工具与恢复的具体故障证据。
 

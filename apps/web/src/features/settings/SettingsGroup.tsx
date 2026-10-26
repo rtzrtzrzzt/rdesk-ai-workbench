@@ -1,13 +1,4 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useId,
-  useState,
-  type ReactNode,
-} from 'react'
-import { ChevronDown } from 'lucide-react'
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 
 type ReportAttention = (id: string, message: string | null) => void
 const AttentionContext = createContext<ReportAttention | null>(null)
@@ -21,17 +12,21 @@ export function useSettingsAttention(id: string, active: boolean, message: strin
   }, [report, id, active, message])
 }
 
-export function SettingsGroup({
+export function SettingsPanel({
+  id,
   title,
   description,
+  active,
+  onAttentionChange,
   children,
 }: {
+  id: string
   title: string
   description: string
+  active: boolean
+  onAttentionChange: (id: string, attention: boolean) => void
   children: ReactNode
 }) {
-  const id = useId()
-  const [expanded, setExpanded] = useState(false)
   const [attention, setAttention] = useState<Record<string, string>>({})
   const report = useCallback<ReportAttention>((key, message) => {
     setAttention((previous) => {
@@ -41,36 +36,30 @@ export function SettingsGroup({
       else delete next[key]
       return next
     })
-    if (message) setExpanded(true)
   }, [])
   const messages = Object.values(attention)
+  const needsAttention = messages.length > 0
+  useEffect(() => {
+    onAttentionChange(id, needsAttention)
+    return () => onAttentionChange(id, false)
+  }, [id, needsAttention, onAttentionChange])
   return (
-    <section className="settings-group">
-      <h2 className="settings-group-heading">
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-controls={id}
-          onClick={() => setExpanded(!expanded)}
-        >
-          <span>
-            <strong>{title}</strong>
-            <small>{description}</small>
-          </span>
-          <ChevronDown size={17} aria-hidden="true" />
-        </button>
-      </h2>
-      {messages.length > 0 && (
-        <button
-          type="button"
-          className="settings-attention"
-          onClick={() => setExpanded(true)}
-          aria-controls={id}
-        >
-          {messages.join('；')} · 查看并处理
-        </button>
+    <section
+      id={`settings-${id}`}
+      className="settings-panel"
+      aria-labelledby={`settings-${id}-title`}
+      hidden={!active}
+    >
+      <div className="settings-panel-heading">
+        <h2 id={`settings-${id}-title`}>{title}</h2>
+        <p>{description}</p>
+      </div>
+      {needsAttention && (
+        <p className="settings-attention" role="status">
+          {messages.join('；')}
+        </p>
       )}
-      <div id={id} className="settings-group-content" hidden={!expanded}>
+      <div className="settings-panel-content">
         <AttentionContext.Provider value={report}>{children}</AttentionContext.Provider>
       </div>
     </section>

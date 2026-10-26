@@ -5,6 +5,7 @@ import time
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from workbench.contracts.command_limits import DEFAULT_COMMAND_TIMEOUT_SECONDS
 from workbench.contracts.errors import AppError
 from workbench.infrastructure.database import engine, now
 from workbench.infrastructure.secrets import decrypt
@@ -157,6 +158,20 @@ def append_text(run_id: str, message_id: str, delta: str, *, reasoning: bool = F
         )
 
 
+def record_tool_preparation(run_id: str, attempt_id: str, index: int, name: str) -> None:
+    with Session(engine()) as db, db.begin():
+        run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        attempt = db.get(Attempt, attempt_id)
+        if run.cancel_requested_at or attempt.status != "running":
+            return
+        emit(
+            db,
+            run_id,
+            "tool.preparing",
+            {"attempt_id": attempt_id, "index": index, "name": name},
+        )
+
+
 def finish_attempt(
     run_id: str,
     attempt_id: str,
@@ -170,9 +185,9 @@ def finish_attempt(
         run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
         attempt = db.get(Attempt, attempt_id)
         message = db.get(Message, message_id)
-        from workbench.modules.collaboration.inbox import has_new_user_input
+        from workbench.modules.collaboration.inbox import has_new_directive
 
-        if (error is None or error.code == "model_output_limit") and has_new_user_input(
+        if (error is None or error.code == "model_output_limit") and has_new_directive(
             db, run_id, attempt.input_message_ids
         ):
             error = AppError(
@@ -270,6 +285,9 @@ def configuration(
         from workbench.modules.automation.visual import add_latest_observation
 
         messages = add_latest_observation(db, run, [dict(item) for item in messages], frozen)
+        from workbench.modules.media.visual import add_latest_output
+
+        messages = add_latest_output(db, run, messages, frozen)
         if is_remote(frozen["endpoint"]) and not model.allow_remote:
             raise AppError(
                 "remote_permission_revoked",
@@ -300,13 +318,21 @@ def configuration(
             engine_kind=generation.get("engine_kind", "auto"),
             thinking_mode=generation.get("thinking_mode", "default"),
             reasoning_effort=generation.get("reasoning_effort"),
+            reasoning_adapter=generation.get("reasoning_adapter", "auto"),
+            native_reasoning_efforts=tuple(generation.get("native_reasoning_efforts", [])),
+            prompt_template=generation.get("prompt_template"),
         )
         from workbench.modules.tools.selection import for_run as selected_tools
 
         names = selected_tools(db, run)
         if names != run.config_snapshot.get("tool_names"):
             run.config_snapshot = {**run.config_snapshot, "tool_names": names}
-        tools = definitions(names)
+        tools = definitions(
+            names,
+            command_timeout_seconds=run.config_snapshot.get("runtime_options", {}).get(
+                "command_timeout_seconds", DEFAULT_COMMAND_TIMEOUT_SECONDS
+            ),
+        )
         tool_capability = frozen["capabilities"].get("tool_calling", {})
         if tool_capability.get("support") == "unsupported" or not tool_capability.get(
             "enabled", True
@@ -603,6 +629,7 @@ async def generate_permitted(run_id, source_messages, round_number):
         reasoning_length = 0
         reasoning_flushed = started
         calls = []
+        preparing_tools = set()
         provider_output = None
         phase = None
         finished = False
@@ -649,6 +676,20 @@ async def generate_permitted(run_id, source_messages, round_number):
                         reasoning_flushed = time.monotonic()
                 elif event.kind == "message_phase":
                     phase = event.data["phase"]
+                elif event.kind == "tool_preparing":
+                    key = (event.data["index"], event.data["name"])
+                    if key not in preparing_tools:
+                        # Flush preceding commentary before starting its tool row.
+                        await asyncio.to_thread(append_text, run_id, message_id, buffer)
+                        full_text += buffer
+                        buffer = ""
+                        await asyncio.to_thread(
+                            append_text, run_id, message_id, reasoning_buffer, reasoning=True
+                        )
+                        reasoning_length += len(reasoning_buffer)
+                        reasoning_buffer = ""
+                        await asyncio.to_thread(record_tool_preparation, run_id, attempt_id, *key)
+                        preparing_tools.add(key)
                 elif event.kind == "tool_call":
                     calls.append(event.data)
                 elif event.kind == "provider_output":

@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+from contextlib import ExitStack
 from pathlib import Path
 
 from fastapi.encoders import jsonable_encoder
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from workbench.contracts.command_limits import DEFAULT_COMMAND_TIMEOUT_SECONDS
 from workbench.contracts.errors import AppError
 from workbench.infrastructure.database import engine
 from workbench.modules.interactions import Approval, Question
@@ -17,6 +19,7 @@ from workbench.modules.runs.service import approval_view, emit, question_view, s
 from workbench.modules.tools import filesystem
 from workbench.modules.tools.domain import Operation
 from workbench.modules.tools.registry import CORE_TOOL_NAMES, TOOLS
+from workbench.modules.tools.validation import command_timeout, parameter_error
 from workbench.modules.workspaces import Workspace
 
 
@@ -32,8 +35,8 @@ def ensure_operation(run_id: str, call: dict) -> tuple[str, dict | None, dict]:
         raise AppError("tool_not_registered", "模型请求了未注册工具。", 400, "policy")
     try:
         values = TOOLS[name].schema.model_validate(call["arguments"]).model_dump(mode="json")
-    except ValidationError:
-        raise AppError("invalid_tool_arguments", "工具参数不符合格式，请修正后继续。") from None
+    except ValidationError as error:
+        raise parameter_error(error, TOOLS[name].schema) from None
     with Session(engine()) as db, db.begin():
         run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
         if name not in run.config_snapshot.get("tool_names", CORE_TOOL_NAMES):
@@ -49,13 +52,26 @@ def ensure_operation(run_id: str, call: dict) -> tuple[str, dict | None, dict]:
                 Operation.tool_call_id == call["id"],
             )
         )
+        if name in {"exec_command", "start_command"}:
+            values = command_timeout(
+                values,
+                run.config_snapshot.get("runtime_options", {}),
+                operation.arguments if operation else None,
+            )
         if operation:
             recorded_arguments = dict(operation.arguments)
             if name == "spawn_agent":
+                recorded_arguments.setdefault("reasoning_effort", None)
                 for key in ("max_output_tokens", "max_model_rounds"):
                     recorded_arguments.pop(key, None)
                 if "allowed_tools" not in call["arguments"]:
                     values["allowed_tools"] = recorded_arguments.get("allowed_tools")
+            # Preserve original durable arguments and their approval digest when
+            # replaying calls made before optional query/PTY fields existed.
+            for key in list(values.keys() - recorded_arguments.keys()):
+                field = TOOLS[name].schema.model_fields.get(key)
+                if key not in call["arguments"] and field is not None and not field.is_required():
+                    values.pop(key)
             if operation.tool_name != name or recorded_arguments != values:
                 raise AppError("tool_call_conflict", "调用标识对应的工具或参数已改变。", 409)
             if operation.status in {"succeeded", "failed"} and operation.result is not None:
@@ -81,14 +97,39 @@ def enforce_agent_scope(db, run, name, values):
         return
     if name not in run.config_snapshot.get("allowed_tools", []):
         raise AppError("agent_tool_scope", "工具不在此子任务的授权范围。", 403, "policy")
+    from workbench.modules.collaboration.policy import child_tool_allowed
+
+    if not child_tool_allowed(name, TOOLS[name].module):
+        raise AppError(
+            "agent_tool_scope", "子任务只能协作通信，不能派生或控制其它Agent。", 403, "policy"
+        )
     if TOOLS[name].requires_approval and run.config_snapshot.get("agent_mode") != "serial_write":
         raise AppError("agent_read_only", "此子任务为只读模式。", 403, "policy")
     paths = run.config_snapshot.get("allowed_paths", [])
-    if paths and TOOLS[name].module == "filesystem" and "path" in values:
+    if paths and TOOLS[name].module == "filesystem":
         root = Path(db.get(Workspace, run.workspace_id).root_path).resolve()
-        target = filesystem.authorized_path(root, values["path"])
-        if not any(target.is_relative_to(filesystem.authorized_path(root, path)) for path in paths):
-            raise AppError("agent_path_scope", "此路径不在子任务允许的文件范围。", 403, "policy")
+        if name == "code_intelligence" and not any(
+            filesystem.authorized_path(root, path) == root for path in paths
+        ):
+            raise AppError(
+                "agent_code_scope",
+                "代码分析器需要完整工作区的只读授权，请由主任务执行。",
+                403,
+                "policy",
+            )
+        targets = (
+            [values["path"]]
+            if "path" in values
+            else [item["path"] for item in values.get("files", [])]
+        )
+        for value in targets:
+            target = filesystem.authorized_path(root, value)
+            if not any(
+                target.is_relative_to(filesystem.authorized_path(root, path)) for path in paths
+            ):
+                raise AppError(
+                    "agent_path_scope", "此路径不在子任务允许的文件范围。", 403, "policy"
+                )
 
 
 def prepare_question(run_id: str, operation_id: str, values: dict) -> dict:
@@ -110,7 +151,14 @@ def prepare_question(run_id: str, operation_id: str, values: dict) -> dict:
         return question_view(question)
 
 
-def prepare_approval(run_id: str, operation_id: str, name: str, values: dict) -> dict:
+def prepare_approval(
+    run_id: str,
+    operation_id: str,
+    name: str,
+    values: dict,
+    *,
+    provided_arguments: dict | None = None,
+) -> dict:
     with Session(engine()) as db, db.begin():
         run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
         check_steering(db, run_id, operation_id)
@@ -121,6 +169,10 @@ def prepare_approval(run_id: str, operation_id: str, name: str, values: dict) ->
                 if name in {"exec_command", "start_command"}
                 else f"允许 {name} 修改这个文件？提交前会再次核对版本。"
             )
+            if TOOLS[name].module == "media":
+                summary = (
+                    "允许使用已接入的生成模型按本次参数提交一次任务？提交结果未知时不会自动重提。"
+                )
             if name in {"exec_command", "start_command"}:
                 profile = run.config_snapshot.get("runtime_options", {}).get(
                     "sandbox_profile", "native_scoped"
@@ -141,6 +193,25 @@ def prepare_approval(run_id: str, operation_id: str, name: str, values: dict) ->
                     [config.get("command", ""), *config.get("args", [])]
                 )
                 summary = f"允许MCP工具 {values['tool_name']} 执行本次参数？目标：{target}"
+            if name in {"mcp_list_resources", "mcp_list_resource_templates", "mcp_read_resource"}:
+                from workbench.modules.mcp.resources import approval_summary
+
+                summary = approval_summary(db, run, name, values)
+            if name == "configure_settings":
+                summary = (
+                    "允许按本次参数修改工作台设置？按范围、版本和模块校验保存；"
+                    "凭据正文、服务启停和数据维护使用专用边界。"
+                )
+            if name == "write_command_input":
+                summary = (
+                    "允许向本任务已有交互终端输入本次字符或EOF？"
+                    "输入可能产生业务效果，未知结果不重发。"
+                )
+            if name == "code_intelligence":
+                summary = (
+                    "允许按受信代码智能配置运行短命本地语言服务器读取项目并返回导航/诊断？"
+                    "不执行项目代码，结束或取消后回收进程。"
+                )
             if name == "browser_download":
                 from workbench.modules.automation.service import get_session
 
@@ -175,6 +246,25 @@ def prepare_approval(run_id: str, operation_id: str, name: str, values: dict) ->
                 arguments=values,
                 parameters_digest=argument_digest(values),
             )
+            if run.config_snapshot.get("runtime_options", {}).get("approval_mode") == "smart":
+                from workbench.modules.tools.review import queued_review
+
+                sources = None
+                if name in {"exec_command", "start_command"} and provided_arguments is not None:
+                    inherited = provided_arguments.get("timeout_seconds") is None
+                    budget = run.config_snapshot.get("runtime_options", {}).get(
+                        "command_timeout_seconds", DEFAULT_COMMAND_TIMEOUT_SECONDS
+                    )
+                    sources = {
+                        "timeout_seconds": (
+                            "task_default"
+                            if inherited and values["timeout_seconds"] == budget
+                            else "recorded_default"
+                            if inherited
+                            else "explicit"
+                        )
+                    }
+                approval.review = queued_review(approval, argument_sources=sources)
             db.add(approval)
             db.flush()
             emit(db, run_id, "approval.requested", {"approval": approval_view(approval)})
@@ -297,7 +387,7 @@ def execution_root(run_id: str, operation_id: str, name: str, call_id: str) -> P
 
 
 def check_steering(db, run_id, operation_id):
-    from workbench.modules.collaboration.inbox import has_new_user_input
+    from workbench.modules.collaboration.inbox import has_new_directive
 
     operation = db.get(Operation, operation_id)
     if operation and (
@@ -306,7 +396,7 @@ def check_steering(db, run_id, operation_id):
         # An MCP continuation or an already launched command must reach its
         # real completion/reconciliation boundary; steering is not rollback.
         return
-    if has_new_user_input(db, run_id):
+    if has_new_directive(db, run_id):
         raise AppError(
             "tool_skipped_for_steering", "收到新要求，此操作尚未执行，将重新规划。", kind="steering"
         )
@@ -321,13 +411,40 @@ def file_change(run_id: str, root: Path, name: str, values: dict) -> dict:
     from workbench.infrastructure.locks import advisory_connection
     from workbench.modules.runs.ownership import assert_owned
 
-    target = filesystem.authorized_path(root, values["path"])
-    with advisory_connection(f"workspace-file:{target}") as connection:
+    targets = (
+        [item["path"] for item in values["files"]] if name == "edit_files" else [values["path"]]
+    )
+    with ExitStack() as locks:
+        connection = None
+        for target in sorted({str(filesystem.authorized_path(root, path)) for path in targets}):
+            connection = locks.enter_context(advisory_connection(f"workspace-file:{target}"))
         with Session(bind=connection) as db, db.begin():
             run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
             assert_owned(db, run_id)
             if run.cancel_requested_at:
                 raise asyncio.CancelledError
+            if name == "edit_files":
+                from workbench.modules.tools.file_queries import prepare_edits
+
+                prepared = prepare_edits(root, values)
+                results = []
+                for item in prepared:
+                    if run.cancel_requested_at:
+                        raise asyncio.CancelledError
+                    try:
+                        results.append(filesystem.change_file(root, item, patch=False))
+                    except AppError as error:
+                        return {
+                            "files": results,
+                            "complete": False,
+                            "error": {"code": error.code, "message": error.message},
+                            "remaining": [row["path"] for row in prepared[len(results) :]],
+                        }
+                return {"files": results, "complete": True}
+            if name == "edit_notebook":
+                from workbench.modules.tools.notebooks import edit_notebook
+
+                return edit_notebook(root, values)
             return filesystem.change_file(root, values, patch=name == "apply_patch")
 
 
@@ -335,9 +452,12 @@ def record_unknown(run_id: str, operation_id: str, name: str, result: dict) -> N
     with Session(engine()) as db, db.begin():
         db.scalar(select(Run).where(Run.id == run_id).with_for_update())
         operation = db.get(Operation, operation_id)
+        combined = {**(operation.result or {}), **result}
+        if operation.status == "outcome_unknown" and operation.result == combined:
+            return
         operation.status = "outcome_unknown"
         operation.effect_status = "needs_reconciliation"
-        operation.result = result
+        operation.result = combined
         emit(
             db,
             run_id,
@@ -345,7 +465,8 @@ def record_unknown(run_id: str, operation_id: str, name: str, result: dict) -> N
             {
                 "operation_id": operation_id,
                 "tool_name": name,
-                "message": "命令已超时停止，部分修改可能已经发生，请先核对结果。",
+                "message": (combined.get("error") or {}).get("message")
+                or "工具实际执行结果尚未确认，请先核对原记录，不要重复执行。",
             },
         )
 
@@ -357,18 +478,35 @@ async def execute_one(run_id: str, call: dict) -> dict:
             return existing
         await asyncio.to_thread(before_tool, run_id, operation_id)
         name = call["name"]
-        if TOOLS[name].module == "filesystem" and "path" in values:
-            notice = await asyncio.to_thread(rule_notice, run_id, values["path"])
-            if notice:
-                await asyncio.to_thread(
-                    record_result, run_id, operation_id, notice, effect_status="not_started"
-                )
-                return notice
+        if TOOLS[name].module == "filesystem":
+            paths = (
+                [values["path"]]
+                if "path" in values
+                else [item["path"] for item in values.get("files", [])]
+            )
+            for path in paths:
+                notice = await asyncio.to_thread(rule_notice, run_id, path)
+                if notice:
+                    await asyncio.to_thread(
+                        record_result, run_id, operation_id, notice, effect_status="not_started"
+                    )
+                    return notice
         if name == "ask_user":
             question = await asyncio.to_thread(prepare_question, run_id, operation_id, values)
             interrupt({"kind": "question", "question_id": question["id"]})
             await asyncio.to_thread(before_tool, run_id, operation_id)
             result = await asyncio.to_thread(answer_result, question["id"])
+            await asyncio.to_thread(record_result, run_id, operation_id, result)
+            return result
+        if name == "wait_agent_message":
+            from workbench.modules.collaboration.service import (
+                finish_message_wait,
+                prepare_message_wait,
+            )
+
+            if await asyncio.to_thread(prepare_message_wait, run_id, values["timeout_seconds"]):
+                interrupt({"kind": "agent_message", "run_id": run_id})
+            result = jsonable_encoder(await asyncio.to_thread(finish_message_wait, run_id))
             await asyncio.to_thread(record_result, run_id, operation_id, result)
             return result
         if name == "wait_agents":
@@ -380,20 +518,35 @@ async def execute_one(run_id: str, call: dict) -> dict:
             await asyncio.to_thread(record_result, run_id, operation_id, result)
             return result
         if await asyncio.to_thread(needs_approval, run_id, name, values):
-            approval = await asyncio.to_thread(prepare_approval, run_id, operation_id, name, values)
+            approval = await asyncio.to_thread(
+                prepare_approval,
+                run_id,
+                operation_id,
+                name,
+                values,
+                provided_arguments=call["arguments"],
+            )
             if approval["status"] == "pending":
                 from workbench.modules.tools.review import review
 
                 await review(run_id, approval["id"])
                 approval = await asyncio.to_thread(
-                    prepare_approval, run_id, operation_id, name, values
+                    prepare_approval,
+                    run_id,
+                    operation_id,
+                    name,
+                    values,
+                    provided_arguments=call["arguments"],
                 )
             if approval["status"] == "pending":
                 interrupt({"kind": "approval", "approval_id": approval["id"]})
             await asyncio.to_thread(before_tool, run_id, operation_id)
             approved = await asyncio.to_thread(approved_result, approval["id"], values)
             if not approved:
-                result = {"error": {"code": "permission_denied", "message": "本次操作未获批准。"}}
+                assessment = approval.get("review") or {}
+                reason = assessment.get("reason") if assessment.get("decision") == "deny" else None
+                message = f"自动审核已拒绝：{reason}" if reason else "本次操作未获批准。"
+                result = {"error": {"code": "permission_denied", "message": message}}
                 await asyncio.to_thread(
                     record_result, run_id, operation_id, result, effect_status="not_started"
                 )
@@ -418,11 +571,23 @@ async def execute_one(run_id: str, call: dict) -> dict:
         await asyncio.to_thread(observe, run_id, operation_id, name, values, result)
         return result
     except AppError as error:
-        if error.kind in {"outcome_unknown", "ownership"}:
+        if error.kind == "outcome_unknown":
+            if "operation_id" in locals():
+                await asyncio.to_thread(
+                    record_unknown,
+                    run_id,
+                    operation_id,
+                    call["name"],
+                    {"error": {"code": error.code, "message": error.message}},
+                )
+            raise
+        if error.kind == "ownership":
             raise
         result = {
             "error": {"code": error.code, "message": error.message, "retryable": error.retryable}
         }
+        if error.code in {"invalid_tool_arguments", "command_capacity"} and error.details:
+            result["error"]["details"] = error.details
         if "operation_id" in locals():
             await asyncio.to_thread(
                 record_result, run_id, operation_id, result, effect_status="not_started"
@@ -460,20 +625,53 @@ async def invoke(run_id, operation_id, root, name, values):
         "artifacts",
         "collaboration",
         "context",
+        "conversations",
+        "guide",
         "mcp",
         "generated",
         "automation",
         "processes",
+        "skills",
+        "rules",
+        "media",
+        "plan",
+        "configuration",
     }:
         from workbench.modules.tools.extensions import execute
 
         return await execute(run_id, operation_id, name, values)
-    if name in {"write_file", "apply_patch"}:
+    if name in {"write_file", "apply_patch", "edit_files", "edit_notebook"}:
         return await asyncio.to_thread(file_change, run_id, root, name, values)
     if name == "list_files":
-        return await asyncio.to_thread(filesystem.list_files, root, values["path"])
+        return await asyncio.to_thread(
+            filesystem.list_files,
+            root,
+            values["path"],
+            cursor=values.get("cursor"),
+            limit=values.get("limit", 500),
+        )
+    if name in {"find_files", "read_files", "search_files"}:
+        from workbench.modules.tools import file_queries
+
+        if name == "search_files":
+            return await file_queries.search_files(root, values)
+        return await asyncio.to_thread(getattr(file_queries, name), root, values)
     if name == "read_file":
         return await asyncio.to_thread(filesystem.read_file, root, values)
+    if name == "read_notebook":
+        from workbench.modules.tools.notebooks import read_notebook
+
+        return await asyncio.to_thread(read_notebook, root, values)
+    if name == "code_intelligence":
+        from workbench.modules.preferences.configuration import get_state
+        from workbench.modules.tools.code_intelligence import execute
+
+        with Session(engine()) as db:
+            run = db.get(Run, run_id)
+            row = get_state(db, run.user_id, "developer_tools", run.workspace_id)
+            row = row or get_state(db, run.user_id, "developer_tools")
+            servers = row.values.get("language_servers") if row else None
+        return await execute(root, values, servers=servers)
     if name == "exec_command":
         from workbench.modules.processes.service import execute_bounded
 

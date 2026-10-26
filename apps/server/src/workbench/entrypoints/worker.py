@@ -26,10 +26,12 @@ def resolved_interaction(payload) -> tuple[bool, object]:
 
             guard = db.get(Run, payload["run_id"]).config_snapshot.get("safety", {})
             return guard.get("accepted_wait") == payload["id"], True
-        if payload["kind"] == "agents":
+        if payload["kind"] in {"agents", "agent_message"}:
             from workbench.modules.collaboration.service import wait_ready
 
-            return wait_ready(db, payload["run_id"]), True
+            return wait_ready(
+                db, payload["run_id"], messages_only=payload["kind"] == "agent_message"
+            ), True
         if payload["kind"] == "question":
             question = db.get(Question, payload["question_id"])
             # The tool reads the durable answer itself. A non-null acknowledgement
@@ -47,11 +49,16 @@ def resolved_interaction(payload) -> tuple[bool, object]:
 async def advance(graph, run_id: str) -> dict:
     from workbench.modules.runs.domain import Run
 
-    def compaction_job():
+    def job_kind():
         with Session(engine()) as db:
-            return db.get(Run, run_id).kind == "context_compaction"
+            return db.get(Run, run_id).kind
 
-    if await asyncio.to_thread(compaction_job):
+    kind = await asyncio.to_thread(job_kind)
+    if kind == "conversation_naming":
+        from workbench.modules.conversation_naming import process
+
+        return await process(run_id)
+    if kind == "context_compaction":
         from workbench.modules.context.service import process_idle
 
         return await process_idle(run_id)
@@ -74,9 +81,12 @@ async def advance(graph, run_id: str) -> dict:
     snapshot = await graph.aget_state(config)
     if snapshot.values:
         if snapshot.interrupts:
-            resolved, resume = await asyncio.to_thread(
-                resolved_interaction, snapshot.interrupts[0].value
-            )
+            payload = snapshot.interrupts[0].value
+            if payload.get("kind") == "approval":
+                from workbench.modules.tools.review import review
+
+                await review(run_id, payload["approval_id"])
+            resolved, resume = await asyncio.to_thread(resolved_interaction, payload)
             if not resolved:
                 return {"__interrupt__": snapshot.interrupts}
             return await graph.ainvoke(Command(resume=resume), config, durability="sync")
@@ -121,9 +131,15 @@ async def main_async():
             def queues():
                 with Session(engine()) as db, db.begin():
                     conversation_queue.maintain(db)
+                    from workbench.modules.tools.review import maintain as maintain_reviews
+
+                    maintain_reviews(db)
                     from workbench.modules.context.service import maintain
 
                     maintain(db)
+                    from workbench.modules.conversation_naming import maintain as maintain_naming
+
+                    maintain_naming(db)
 
             try:
                 await asyncio.to_thread(queues)

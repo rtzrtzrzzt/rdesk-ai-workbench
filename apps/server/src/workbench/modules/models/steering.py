@@ -6,14 +6,14 @@ from sqlalchemy.orm import Session
 
 from workbench.contracts.errors import AppError
 from workbench.infrastructure.database import engine
-from workbench.modules.collaboration.inbox import has_new_user_input
+from workbench.modules.collaboration.inbox import has_new_directive, has_new_user_input
 from workbench.modules.models.providers import abort_generation, stream_model
 from workbench.modules.runs.domain import Run
 
 
 def input_arrived(run_id, included):
     with Session(engine()) as db:
-        if has_new_user_input(db, run_id, included):
+        if has_new_directive(db, run_id, included):
             return "generation_steered"
         run = db.get(Run, run_id)
         parent = db.get(Run, run.parent_run_id) if run.parent_run_id else None

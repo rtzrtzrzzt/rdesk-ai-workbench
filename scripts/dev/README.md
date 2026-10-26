@@ -12,6 +12,8 @@ python3 scripts/dev/postgres.py stop     # 仅停止此项目数据目录对应�
 
 `start` 与 `ensure` 相同。Launcher 通过这些入口复用准备和控制逻辑，不应复制 APT 下载、初始化或凭据生成逻辑。数据库迁移由应用的单独受控迁移入口执行；脚本只创建空 `workbench` 数据库和 owner `ai`，不建应用表。
 
+日常统一启动器使用 `resume --data-dir ...`，既有开发布局使用显式 `resume --legacy`。这两条只恢复必要数据、私有凭据和配置均完整的既有集群，验证真实 SQL，不下载、初始化或重写连接元数据；未指定数据根时必须明确 `--legacy`，不能把普通 `resume` 当作新集群准备。
+
 无 `--data-dir` 时，开发数据库只监听 `127.0.0.1:55432`，关闭 Unix socket。随机管理员/应用密码保存在 `.local/postgres/passwords.json`，客户端凭据位于同目录 `pgpass`；均为 `0600`。应用连接文件为 `.local/development/database.json`（`0600`），不得输出其内容。角色 `ai` 仅拥有应用数据库，不是超级用户，不能创建角色或其他数据库；`workbench_admin` 只用于该私有集群管理。上述文件不进入 Git、分享材料或诊断附件。
 
 显式 `--data-dir <绝对应用数据根>` 使用独立布局：`postgres/` 保存集群和受保护状态，`components/postgres/` 保存私有工具，数据根 `database.json` 保存连接及严格匹配的 managed_postgres 描述。端口在首次准备时确定并持久化，以后复用，不能猜测另一个端口或接管占用者。旧 `.local/postgres` 不会自动迁移到该布局；详见[发行说明](../../runtime/distribution/README.md)。

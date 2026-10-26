@@ -22,7 +22,9 @@ def scope_for(run_id: str) -> tuple[str, str, str]:
         return run.user_id, run.workspace_id, "subagent" if run.parent_run_id else "agent"
 
 
-def discover(run_id: str, names: list[str], action: str = "add") -> dict:
+def discover(
+    run_id: str, names: list[str], action: str = "add", *, query="", module=None, offset=0, limit=20
+) -> dict:
     if action not in {"add", "remove", "replace"}:
         raise AppError("invalid_discovery_action", "工具加载操作必须为add、remove或replace。", 422)
     if any(name not in TOOLS for name in names):
@@ -51,8 +53,41 @@ def discover(run_id: str, names: list[str], action: str = "add") -> dict:
         current = (
             set(run.config_snapshot.get("tool_names", CORE_TOOL_NAMES)) & permitted & set(TOOLS)
         )
-        if names or action != "add":
-            requested = set(names)
+        catalog_rows, matches = None, []
+        auto_names = []
+        if not names and action == "add":
+            from workbench.modules.tools.catalog import availability
+
+            terms = query.casefold().split()
+            matches = [
+                (name, spec)
+                for name, spec in sorted(TOOLS.items())
+                if name in permitted
+                and (module is None or spec.module == module)
+                and all(
+                    term in f"{name} {spec.module} {spec.description}".casefold() for term in terms
+                )
+            ]
+            catalog_rows = [
+                {
+                    "name": name,
+                    "description": spec.description,
+                    "module": spec.module,
+                    **availability(db, run, name, spec.module),
+                    "requires_approval": spec.requires_approval,
+                }
+                for name, spec in matches[offset : offset + limit]
+            ]
+            # A targeted search should make its tools usable on the next model
+            # request. The unfiltered catalog remains a read-only listing.
+            if terms or module is not None:
+                auto_names = [
+                    item["name"]
+                    for item in catalog_rows
+                    if item["name"] not in current and item["available"] is not False
+                ][:6]
+        if names or auto_names or action != "add":
+            requested = set(names or auto_names)
             if action == "add":
                 selected = current | requested
             elif action == "remove":
@@ -70,22 +105,29 @@ def discover(run_id: str, names: list[str], action: str = "add") -> dict:
             )
         result = {
             "loaded": enabled,
+            "documentation": {"tool": "read_workbench_guide", "path": "docs/ai-guide.md"},
             "note": (
                 "loaded是下一轮模型请求的工具集合；新工具schema届时才提供，"
                 "本轮不能同时调用尚未加载的工具。默认增量保留已有工具，卸载或替换须显式指定action。"
             ),
         }
-        if not names and action == "add":
-            result["catalog"] = [
-                {
-                    "name": name,
-                    "description": spec.description,
-                    "available": web_enabled if spec.module == "search" else True,
-                    "requires_approval": spec.requires_approval,
-                }
-                for name, spec in sorted(TOOLS.items())
-                if name not in CORE_TOOL_NAMES and name in permitted
-            ]
+        if catalog_rows is not None:
+            result["catalog"] = catalog_rows
+            result["next_offset"] = offset + limit if offset + limit < len(matches) else None
+            result["total"] = len(matches)
+            result["modules"] = sorted({TOOLS[name].module for name in permitted if name in TOOLS})
+            result["auto_loaded"] = auto_names
+            remaining = [
+                item["name"]
+                for item in catalog_rows
+                if item["name"] not in enabled and item["available"] is not False
+            ][:6]
+            result["next_step"] = (
+                "目标在loaded中时，下一轮直接调用该工具，不要重复查询。"
+                "如目标尚未加载，使用load_request中的names明确加载；为空时缩短查询或查看modules。"
+            )
+            if remaining:
+                result["load_request"] = {"names": remaining, "action": "add"}
         return result
 
 
@@ -179,9 +221,91 @@ def artifact_tool(run_id: str, operation_id: str, name: str, values: dict) -> di
 
     user_id, workspace_id, _ = scope_for(run_id)
     with Session(engine()) as db:
+        if name == "inspect_file_processors":
+            from workbench.modules.files.processors import capabilities
+
+            return {"processors": capabilities()}
+        if name == "process_file":
+            from workbench.modules.collaboration.service import lock_root
+            from workbench.modules.files.dto import ProcessFile
+
+            _, parent = lock_root(db, run_id)
+            if parent.cancel_requested_at:
+                raise AppError("run_finished", "任务已停止，不能发起文件处理。", 409)
+            artifact = files.get_artifact(db, user_id, workspace_id, values["artifact_id"])
+            if artifact.content_hash != values["expected_version"]:
+                raise AppError("artifact_version_changed", "文件版本已变化，请重新读取。", 409)
+            command = ProcessFile(
+                request_id=operation_id,
+                **{
+                    key: value
+                    for key, value in values.items()
+                    if key not in {"artifact_id", "expected_version"}
+                },
+            )
+            result = files.create_processing(
+                db, user_id, workspace_id, artifact.id, command, actor=parent
+            )
+            child = db.get(Run, result["id"])
+            db.commit()
+            return {
+                **result,
+                "run_id": child.id,
+                "next_step": (
+                    "本批工具结束后自动等待文件Worker；完成后只用results里的真实文件ID读取。"
+                ),
+            }
+        if name == "cancel_file_task":
+            from workbench.modules.collaboration.service import lock_root
+            from workbench.modules.runs.ownership import current_owner
+            from workbench.modules.runs.service import cancel
+
+            _, parent = lock_root(db, run_id)
+            child = get(db, user_id, values["run_id"])
+            if child.parent_run_id != parent.id or child.kind != "file":
+                raise AppError("file_task_scope", "只能停止本任务创建的文件处理。", 403)
+            token = current_owner.set(None)
+            try:
+                cancel(db, user_id, child.id, operation_id)
+                db.commit()
+            finally:
+                current_owner.reset(token)
+            return files.task_view(db, child)
         if name == "list_artifacts":
-            rows = files.list_artifacts(db, user_id, workspace_id)
-            return {"artifacts": rows[:30], "truncated": len(rows) > 30}
+            from sqlalchemy import or_
+
+            from workbench.modules.files.domain import Artifact
+            from workbench.modules.workspace_service import get as workspace
+
+            workspace(db, user_id, workspace_id)
+            query = select(Artifact).where(
+                Artifact.user_id == user_id,
+                Artifact.workspace_id == workspace_id,
+                Artifact.status == "available",
+            )
+            if values.get("query"):
+                query = query.where(
+                    Artifact.display_name.icontains(values["query"], autoescape=True)
+                )
+            if values.get("before"):
+                previous = files.get_artifact(db, user_id, workspace_id, values["before"])
+                query = query.where(
+                    or_(
+                        Artifact.created_at < previous.created_at,
+                        (Artifact.created_at == previous.created_at) & (Artifact.id < previous.id),
+                    )
+                )
+            limit = values.get("limit", 30)
+            rows = list(
+                db.scalars(
+                    query.order_by(Artifact.created_at.desc(), Artifact.id.desc()).limit(limit + 1)
+                )
+            )
+            return {
+                "artifacts": [files.artifact_view(row) for row in rows[:limit]],
+                "truncated": len(rows) > limit,
+                "next_before": rows[limit - 1].id if len(rows) > limit else None,
+            }
         if name == "read_artifact":
             return read_artifact_text(
                 db,
@@ -190,15 +314,20 @@ def artifact_tool(run_id: str, operation_id: str, name: str, values: dict) -> di
                 values["artifact_id"],
                 values["start_line"],
                 values["limit"],
+                **{
+                    key: values[key]
+                    for key in ("start_character", "max_chars", "expected_version")
+                    if key in values
+                },
             )
         if name == "export_file":
             result = create_export(
-                db, user_id, workspace_id, ExportCreate(**values, request_id=operation_id)
+                db,
+                user_id,
+                workspace_id,
+                ExportCreate(**values, request_id=operation_id),
+                actor_run_id=run_id,
             ).model_dump(mode="json")
-            parent = db.get(Run, run_id)
-            child = db.get(Run, result["id"])
-            child.parent_run_id, child.root_run_id = parent.id, parent.root_run_id or parent.id
-            db.commit()
             return result
         task = get(db, user_id, values["run_id"])
         if task.workspace_id != workspace_id or task.kind != "file":
@@ -294,12 +423,62 @@ def context_tool(run_id, name, values):
 
 
 async def execute(run_id: str, operation_id: str, name: str, values: dict) -> dict:
+    if TOOLS[name].module == "guide":
+        from workbench.modules.tools.guide import read
+
+        return await asyncio.to_thread(read, values)
+    if TOOLS[name].module == "conversations":
+        from workbench.modules.conversation_history.service import execute as history_execute
+
+        return await asyncio.to_thread(history_execute, run_id, name, values)
+    if TOOLS[name].module == "configuration":
+        from workbench.modules.configuration.service import tool as settings_tool
+
+        return await settings_tool(run_id, operation_id, name, values)
+    if TOOLS[name].module == "plan":
+        from workbench.modules.tools.task_plan import execute as plan_execute
+
+        return await asyncio.to_thread(plan_execute, run_id, operation_id, name, values)
+    if TOOLS[name].module == "media":
+        from workbench.modules.media.tools import execute as media_execute
+
+        return await media_execute(run_id, operation_id, name, values)
+    if TOOLS[name].module == "skills":
+        from workbench.modules.extensions.service import tool as skill_tool
+
+        return await asyncio.to_thread(skill_tool, run_id, name, values)
+    if TOOLS[name].module == "rules":
+
+        def read_rules():
+            with Session(engine()) as db:
+                run = db.get(Run, run_id)
+                paths = values["paths"]
+                allowed = run.config_snapshot.get("allowed_paths", [])
+                if allowed:
+                    from pathlib import PurePosixPath
+
+                    for path in paths:
+                        if not any(PurePosixPath(path).is_relative_to(item) for item in allowed):
+                            raise AppError(
+                                "agent_path_denied", "规则路径超出子任务范围。", 403, "policy"
+                            )
+                snapshot = memory.load_rules(db, run.user_id, run.workspace_id, paths)
+                return {
+                    "rules": [item.model_dump(mode="json") for item in snapshot.rules],
+                    "rules_ref": {"paths": paths, "version": snapshot.version_digest},
+                }
+
+        return await asyncio.to_thread(read_rules)
     if TOOLS[name].module == "processes":
         from workbench.modules.processes import service as processes
 
         if name == "start_command":
             return (await processes.start(run_id, operation_id, values)).model_dump(mode="json")
+        if name == "write_command_input":
+            return await processes.write_input(run_id, operation_id, values)
         user_id, workspace_id, _ = scope_for(run_id)
+        if name == "list_commands":
+            return await processes.active_commands(user_id, workspace_id, run_id)
         if name == "stop_command":
             result = await processes.stop(
                 user_id, workspace_id, values["command_id"], run_id=run_id
@@ -366,6 +545,10 @@ async def execute(run_id: str, operation_id: str, name: str, values: dict) -> di
             "limits": "64节点/深度8/单父树；JSON来源≤1MiB；表1000行、图2000点；无动作/HTML/脚本。",
         }
     if TOOLS[name].module == "mcp":
+        if name in {"mcp_list_resources", "mcp_list_resource_templates", "mcp_read_resource"}:
+            from workbench.modules.mcp.resources import execute_resource
+
+            return await execute_resource(run_id, operation_id, name, values)
         from workbench.modules.mcp.execution import execute as mcp_execute
         from workbench.modules.mcp.host import listing
 
@@ -435,24 +618,56 @@ async def execute(run_id: str, operation_id: str, name: str, values: dict) -> di
     if TOOLS[name].module == "collaboration":
         from workbench.modules.collaboration import service as agents
 
+        if name == "inspect_agent_models":
+            user_id, _, _ = await asyncio.to_thread(scope_for, run_id)
+
+            def list_models():
+                from workbench.modules.models.service import list_connections
+
+                with Session(engine()) as db:
+                    return {
+                        "models": [
+                            {
+                                key: row[key]
+                                for key in ("id", "name", "model_identifier", "reasoning_choices")
+                            }
+                            for row in list_connections(db, user_id)
+                        ]
+                    }
+
+            return await asyncio.to_thread(list_models)
         if name == "spawn_agent":
             return await asyncio.to_thread(agents.spawn, run_id, operation_id, values)
         if name == "release_agent":
             return await asyncio.to_thread(agents.release, run_id, values["agent_id"])
-        if name == "cancel_agent":
+        if name in {"cancel_agent", "interrupt_agent"}:
             return await asyncio.to_thread(
                 agents.cancel_agent, run_id, operation_id, values["agent_id"]
             )
         if name == "send_agent_message":
             return await asyncio.to_thread(
-                agents.send_message, run_id, operation_id, values["agent_id"], values["message"]
+                agents.send_message,
+                run_id,
+                operation_id,
+                values["agent_id"],
+                values["message"],
+                values.get("kind", "note"),
+                values.get("reply_to_id"),
+            )
+        if name == "followup_agent":
+            return await asyncio.to_thread(
+                agents.followup, run_id, operation_id, values["agent_id"], values["message"]
             )
         user_id, _, _ = await asyncio.to_thread(scope_for, run_id)
         with Session(engine()) as db:
             return agents.tree(db, user_id, run_id)
     if name == "discover_tools":
         return await asyncio.to_thread(
-            discover, run_id, values["names"], values.get("action", "add")
+            discover,
+            run_id,
+            values["names"],
+            values.get("action", "add"),
+            **{key: values[key] for key in ("query", "module", "offset", "limit") if key in values},
         )
     if name == "memory_search":
         return await asyncio.to_thread(memory_search, run_id, values)

@@ -53,13 +53,22 @@ def test_task_effort_overrides_are_validated_without_mutating_connection():
         "generation": Generation(engine_kind="sglang", thinking_mode="disabled").model_dump(),
     }
     assert adapters.reasoning_overrides(configuration, None) == {}
+    assert adapters.reasoning_overrides(configuration, "disabled") == {
+        "thinking_mode": "disabled",
+        "reasoning_effort": None,
+    }
     assert adapters.reasoning_overrides(configuration, "low") == {
         "thinking_mode": "enabled",
         "reasoning_effort": "low",
     }
     assert configuration["generation"]["thinking_mode"] == "disabled"
     assert configuration["generation"]["reasoning_effort"] is None
-    assert adapters.supported_reasoning_efforts(configuration) == ["low", "medium", "xhigh"]
+    assert adapters.supported_reasoning_efforts(configuration) == [
+        "disabled",
+        "low",
+        "medium",
+        "xhigh",
+    ]
     with pytest.raises(AppError, match="仅支持"):
         adapters.reasoning_overrides(configuration, "high")
     configuration["generation"]["engine_kind"] = "llama_cpp"

@@ -46,6 +46,9 @@ class ProviderConfig:
     engine_kind: str = "auto"
     thinking_mode: str = "default"
     reasoning_effort: str | None = None
+    reasoning_adapter: str = "auto"
+    native_reasoning_efforts: tuple[str, ...] = ()
+    prompt_template: dict | None = None
 
 
 @dataclass
@@ -617,6 +620,15 @@ async def _check_http(response: httpx.Response) -> None:
     raise _remote_error(response.status_code, body)
 
 
+def _tool_preparation(index: int, call: dict, allowed: dict) -> ProviderEvent:
+    # A tool name is enough for live feedback. Never publish unfinished JSON,
+    # file contents, credentials or opaque provider blocks as activity events.
+    name = call.get("name")
+    if isinstance(name, str) and name in allowed:
+        return ProviderEvent("tool_preparing", {"index": index, "name": name})
+    return ProviderEvent("progress", {})
+
+
 async def _chat(
     events, allowed: dict, cache_observation="standard"
 ) -> AsyncIterator[ProviderEvent]:
@@ -687,7 +699,7 @@ async def _chat(
                 if function.get("arguments") is not None:
                     call["arguments"] = _append(call["arguments"], function["arguments"])
                 if function.get("name") or function.get("arguments"):
-                    yield ProviderEvent("progress", {})
+                    yield _tool_preparation(index, call, allowed)
             if choice.get("finish_reason"):
                 finish = _text(choice["finish_reason"])
     raise _protocol("Chat 流在 [DONE] 终止标记前断开。")
@@ -725,9 +737,15 @@ async def _responses(events, allowed: dict) -> AsyncIterator[ProviderEvent]:
                 text = "\n\n" + text
             reasoning_streamed, reasoning_part = True, part
             yield ProviderEvent("reasoning_delta", {"delta": text})
+        elif kind == "response.output_item.added":
+            item = _object(value.get("item"))
+            if item.get("type") == "function_call":
+                yield _tool_preparation(_index(value.get("output_index")), item, allowed)
         elif kind == "response.output_item.done":
             index = _index(value.get("output_index"))
             items[index] = _object(value.get("item"))
+            if items[index].get("type") == "function_call":
+                yield _tool_preparation(index, items[index], allowed)
         elif kind == "response.function_call_arguments.delta":
             index = _index(value.get("output_index"))
             arguments[index] = _append(arguments.get(index, ""), value.get("delta"))
@@ -817,6 +835,8 @@ async def _anthropic(events, allowed: dict) -> AsyncIterator[ProviderEvent]:
                 yield ProviderEvent("text_delta", {"delta": _text(block["text"])})
             elif block.get("type") == "thinking" and block.get("thinking"):
                 yield ProviderEvent("reasoning_delta", {"delta": _text(block["thinking"])})
+            elif block.get("type") == "tool_use":
+                yield _tool_preparation(index, block, allowed)
         elif kind == "content_block_delta":
             index = _index(value.get("index"))
             if index not in open_blocks:

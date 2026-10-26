@@ -103,7 +103,7 @@ function Receipt({ result }: { result: CleanupResult }) {
 export function Cleanup({ userId }: { userId: string }) {
   const client = useQueryClient()
   const confirmId = useId()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)
   const [review, setReview] = useState<Review | null>(null)
   const [confirmed, setConfirmed] = useState(false)
   const [pending, setPending] = useState<CleanupCreate | null>(() => readPending(userId))

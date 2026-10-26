@@ -1,6 +1,8 @@
-# 当前部署的缓存与视频调查
+# 2026-10-17部署的缓存与视频调查
 
 调查日期：2026-10-17。初始调查仅检查本地安装源码、包元数据和非推理接口 `/server_info`、`/metrics`。随后主 agent 明确交接唯一推理槽，授权执行下述一次真实冷/热两请求，结果见实测表；没有追加SSE或视频请求，没有修改运行配置、清缓存、安装依赖或重启服务。
+
+本页运行值与“当前”描述均指当次调查快照，不是1.0.0的实时配置。现行本机部署为131072上下文、MTP开启、推理并发1，后续metrics与真实流式缓存证据见[模型部署说明](README.md)及[实现状态](../../docs/implementation-status.md)。保留下表和两请求原始数值，不把8K样本换算为128K性能；视频仍未取得真实输入验收。
 
 适用范围：SGLang **0.5.21**，官方提交 `e00930c5489053f26d86b179cee0d087f846acbb`；模型固定 revision `fc694b54fb0174e0913e6adf86691ef85a4ead47`，当前实际类 `Qwen4ExpForConditionalGeneration`。本地源码根为 `.runtime/model-env/lib/python3.12/site-packages/sglang/srt/`。链接均指向同一提交，不能用其他版本文档覆盖这里的实际实现。
 
@@ -24,7 +26,7 @@
 | `enable_prefix_mm_cache` | false | false |
 | `mm_process_config` | `{}` | `{}` |
 
-**当次调查** context 8192、chunked prefill 1024、并发 1、MTP 关闭。后续部署已更新为 context 32768；下面冷/热两请求数字仍属于原 8K 配置，不能改写成新配置的基准。`max_mamba_cache_size=70` 是状态槽数，不能解释成 70 个 prompt 或 token。`enable_unified_memory` 是 SGLang 的统一 KV 分配功能开关，与 GB10 硬件 UMA 是两个概念。
+**当次调查** context 8192、chunked prefill 1024、并发 1、MTP 关闭。后续部署先经过32768，再更新为131072/MTP；下面冷/热两请求数字仍属于原8K配置，不能改写成新配置的基准。`max_mamba_cache_size=70` 是状态槽数，不能解释成 70 个 prompt 或 token。`enable_unified_memory` 是 SGLang 的统一 KV 分配功能开关，与 GB10 硬件 UMA 是两个概念。
 
 ## 缓存上报与控制
 

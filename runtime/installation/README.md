@@ -1,6 +1,6 @@
 # 原生源码准备与启动入口
 
-这些文件提供应用 0.1.0 的源码 bootstrap 和可复用 native helper。Launcher 已接入标准数据目录、受管数据库、迁移/就绪、API、两类 Worker 和凭据服务；原生源码发行工具见[发行说明](../distribution/README.md)。当前不是签名二进制安装器或完整离线安装包，Windows/macOS 成套安装仍未取得真实设备证据。
+这些文件提供应用 1.0.0 的源码 bootstrap 和可复用 native helper。Launcher 已接入标准数据目录、受管数据库、迁移/就绪、API、agent/file/media 三类 Worker 和凭据服务；日常组合启停见[一键服务说明](../distribution/one-click-services.md)，原生源码发行工具见[发行说明](../distribution/README.md)。当前不是签名二进制安装器或完整离线安装包，Windows/macOS 成套安装仍未取得真实设备证据。
 
 ## 日常入口与显式安装
 

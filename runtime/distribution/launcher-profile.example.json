@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "environment": {},
+  "database": "auto",
+  "search": "auto",
+  "model": "auto",
+  "model_timeout_seconds": 2400
+}

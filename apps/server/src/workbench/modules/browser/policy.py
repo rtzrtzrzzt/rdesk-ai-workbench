@@ -1,4 +1,4 @@
-"""Exact-origin policy, including a separately configured local acceptance exception."""
+"""Public or exact-origin scope with separately configured local exceptions."""
 
 import asyncio
 import ipaddress
@@ -37,12 +37,20 @@ def origin(value: str) -> str:
 
 
 class NetworkPolicy:
-    def __init__(self, public: list[str], local: list[str], authorized_local: set[str]):
+    def __init__(
+        self,
+        public: list[str],
+        local: list[str],
+        authorized_local: set[str],
+        *,
+        allow_public: bool = False,
+    ):
+        self.allow_public = allow_public
         self.public = {self._exact(value) for value in public}
         self.local = {self._exact(value) for value in local}
         if not self.local.issubset(authorized_local):
             raise deny("本机会话目标没有得到 companion 管理员的精确 origin 授权。")
-        if not self.public | self.local:
+        if not self.public | self.local and not allow_public:
             raise deny("请先明确允许访问的网络 origin。")
         for value in self.public:
             url = parsed(value)
@@ -68,8 +76,15 @@ class NetworkPolicy:
     def validate(self, value: str) -> httpx.URL:
         url = parsed(value)
         source = origin(value)
-        if source not in self.public | self.local:
+        if source not in self.public | self.local and not self.allow_public:
             raise deny()
+        if source not in self.local and self.allow_public:
+            try:
+                if not public_ip(ipaddress.ip_address(url.host)):
+                    raise deny()
+            except ValueError:
+                if url.host == "localhost" or url.host.endswith(".localhost"):
+                    raise deny() from None
         if source in self.local:
             path = unquote(unquote(url.path)).replace("\\", "/")
             parts = []

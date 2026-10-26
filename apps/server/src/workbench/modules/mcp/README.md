@@ -171,6 +171,29 @@ rejection/timeout stops the operation as unknown; it never restarts from scratch
 Arbitrary legacy push callbacks and long-running remote task recovery remain
 unsupported. There is no claim of remote restart recovery or exactly-once writes.
 
+## Governed resources
+
+The host also exposes `mcp_list_resources`, `mcp_list_resource_templates` and
+`mcp_read_resource` through `resources.py`. Each request binds the enabled,
+execution-authorized connection and version, a live discovery snapshot, the
+exact operation/arguments and an independent approval. Listing may start the
+configured stdio executable, so a server's read-only annotation does not bypass
+approval. Discovery and the current server must both declare resources support.
+The host sends resource URIs only to that connection; it never opens them as
+local paths or arbitrary HTTP URLs. Subscriptions, resource writes and automatic
+answers to resource `input_required` responses remain unsupported.
+
+Directory results use numeric `offset`/`limit`, with bounded SDK cursor traversal;
+opaque server cursors and `_meta` do not enter model results. Reads return a
+selected content item as UTF-8 text or base64 characters with `next_offset`,
+`next_content_index` and a `resource_version`; continuation can require
+`expected_version`, rejecting changed content. Output remains explicitly
+untrusted and byte bounded. The existing durable exchange ledger records dispatch
+and receipts, credentials are redacted at the transport boundary, and revocation
+is checked again before returning content. Missing receipts remain unknown and
+are never automatically replayed. Transports close after each resource request;
+these bounded routes do not imply support for every server or remote recovery.
+
 ## Real auxiliary validation
 
 ```sh
@@ -214,7 +237,7 @@ These are protocol/ledger auxiliary checks. Production ORM, ToolSpec, permission
 durable Question handling and the settings UI are now connected; their product
 acceptance remains distinct from these earlier transport checks.
 Auto fallback against an independently old-only server, OAuth/mTLS, remote
-restart recovery, arbitrary resources, task extensions and hostile-process hard
+restart recovery, unrestricted resource access, task extensions and hostile-process hard
 isolation have not been verified or claimed supported.
 
 The settings UI preserves an uncertain configuration/discovery request ID and

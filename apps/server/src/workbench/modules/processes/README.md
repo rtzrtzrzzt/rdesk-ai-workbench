@@ -35,7 +35,27 @@ REQ07 的持久日志执行机制；`start_command` 与 `exec_command` 已统一
 }
 ```
 
-示例 UUID 为接口占位说明，不能直接作为业务记录；实际辅助验证均用当次随机 command UUID。timeout 1..3600；max_output_bytes 默认32MiB，stdout+stderr总上限64MiB（可配置更小）。argv 1..256 个非 NUL 字符串，每项最多32768字符；plan 最多256KiB。cwd 只是执行位置，并非 OS 文件访问隔离。没有自动 shell；确需 shell 必须由 host 显式授权 argv 中的 shell。supervisor 自身环境仅含固定 PATH、LANG、LC_ALL；实际命令由 SandboxProvider 准备环境。native_scoped 将 HOME/TMPDIR/TEMP/TMP 映射到所选工作区，不继承宿主 HOME、Python path、DB/key/token/proxy 环境；这些变量并非不存在，也不构成 OS 隔离。linux_bwrap 仅在能力可用时采用其独立 `/tmp`/HOME，不能静默回退。plan 只保存 profile 和受控路径，FD 由真正 command runner 内 prepare_command 后直接继承和关闭。
+示例 UUID 为接口占位说明，不能直接作为业务记录；实际辅助验证均用当次随机 command UUID。timeout 1..86400；任务冻结的`command_timeout_seconds`默认3600秒，可在系统→用户→工作区→本次任务逐级覆盖。`exec_command`和`start_command`省略或null时继承任务预算，显式值可更短且不能超出冻结上限；归一化发生在创建审批前，已保存操作重放保留其原时限。共享常量同时供API、工具schema和native plan使用。max_output_bytes 默认32MiB，stdout+stderr总上限64MiB（可配置更小）。argv 1..256 个非 NUL 字符串，每项最多32768字符；plan 最多256KiB。cwd 只是执行位置，并非 OS 文件访问隔离。没有自动 shell；确需 shell 必须由 host 显式授权 argv 中的 shell。supervisor 自身环境仅含固定 PATH、LANG、LC_ALL；实际命令由 SandboxProvider 准备环境。native_scoped 将 HOME/TMPDIR/TEMP/TMP 映射到所选工作区，不继承宿主 HOME、Python path、DB/key/token/proxy 环境；这些变量并非不存在，也不构成 OS 隔离。linux_bwrap 仅在能力可用时采用其独立 `/tmp`/HOME，不能静默回退。plan 只保存 profile 和受控路径，FD 由真正 command runner 内 prepare_command 后直接继承和关闭。
+
+普通`exec_command`继续等待真实结束，结果契约保持；预计耗时或需要即时句柄时使用现有`start_command`，同一`command_id`通过`read_command_output`按`next_offset`继续读取、`stop_command`停止。`eof`仅表示当前日志尾，必须看嵌套`command.owned_resources_closed`、状态及退出码确认结束；活动命令的合法等待不计作重复无效调用。任务收尾仍会停止尚未结束的命令，不承诺跨任务后台常驻。
+
+### 交互终端
+
+`start_command(interactive=true)`在同一原生supervisor内创建Linux PTY，固定24行×80列，标准错误合并到标准输出；默认false的旧计划保持非交互行为。当前只允许`native_scoped`，不能把PTY入口作为`linux_bwrap`失效时的自动回退，也不因此获得Windows/macOS支持。命令日志、超时、容量和完整资源关闭判断复用原账本。
+
+公开工具`write_command_input(command_id,data,eof)`仅向当前根任务自己的活动终端输入，仍需参数一致的独立批准；子任务、已结束/停止/归属未知的终端均拒绝。`data`最多4096 UTF-8字节，空输入只有显式`eof=true`时合法；EOF发送当前canonical终端的EOF字符，raw模式不支持此操作。输入意图先持久化，supervisor在不可逆写入前保存`sending`回执，同操作不重发。确认丢失时返回unknown，必须核对原日志/回执，不能再次发送相同内容；`sent`只证明写入终端，不证明命令业务成功。
+
+完整AI调用流程、文件查询、notebook及代码智能工具的当前边界见[AI操作手册](../../../../../../docs/ai-guide.md)。本页后文2026-10-18证据属于当时命令驱动，不作为PTY、容量增量或跨boot核对的全部验收证明；后续实际流程见[实现状态](../../../../../../docs/implementation-status.md)。
+
+### 命令并发与满额处理
+
+`exec_command`与`start_command`共用持久准入，默认每Run最多2个活动命令、整机最多4个。整机配置由`WORKBENCH_COMMAND_MAX_ACTIVE_PER_RUN`及`WORKBENCH_COMMAND_MAX_ACTIVE_TOTAL`控制，均为1..32且每Run不大于整机；所有应用进程使用相同配置，重启应用后生效。通过一键启动时可在私有启动配置的`environment`中保存这两个字符串值，禁止打印含凭据的完整配置。AI可用`read_settings(section="application")`读取有效值和配置说明；这些是整机运行配置，不作为单个用户的在线偏好保存，也不改变模型推理并发。
+
+`list_commands`核对关闭回执后返回当前Run的活动`command_id`、状态、有限命令摘要、每Run/整机占用及剩余名额；其他任务只提供数量，不能借此读取或停止其他任务命令。工具不会发送停止信号。满额会先在准入事务外核对一次真实回执，再原子检查名额；仍满额则返回`command_capacity`，包含同样的结构化占位详情和`not_started=true`。此次没有启动命令，主模型应先继续读取原日志、复用交互终端或等待关闭，避免循环新建。系统已有janitor继续负责后台停止与完整日志发布。
+
+只有身份、nonce及完整资源关闭回执核对成功才能释放名额。状态未知、执行器失联或日志`eof`不等于已关闭；未知资源继续占位。不新增隐式命令排队，避免把需要交互输入的活动命令留在模型无法继续操作的等待中。
+
+用户取消后，若所有剩余命令都有已核对的终态unknown回执且supervisor确已消失，并且没有活动子任务、MCP传输、电脑或生成资源，可以结束agent的执行生命周期，Run记为`failed/resource_cleanup_unconfirmed`。界面明确显示“执行已中止，资源待核对”，允许继续发消息；不会把它记为成功或资源已关。命令资源行仍为`outcome_unknown/closed=false`，继续占名额并独立对账，删除保护不放开。尚在运行的执行器、缺失/身份不符的回执不满足这一条件，继续原来的停止收尾。
 
 ## Native receipt 与状态
 
@@ -59,6 +79,8 @@ Supervisor 先成为 Linux child subreaper，再创建唯一 command tree。只�
 ## 崩溃与平台边界
 
 Supervisor SIGKILL/断电、manifest不全、身份变化、回执写失败都不能推断外部命令没发生。新 host 可重读原生回执，但不能在 supervisor 消失后重新创造已丢失的 pidfd/后代归属，更不能从头重发。无真实 closed 回执时持续 unknown；即便运维另行清理资源，也不能把缺失的 runner 事实自动改为成功。
+
+启动意图`launch.json`及新runner回执现在保存实际Linux `boot_id`。核实启动意图的command_id/nonce一致且系统boot确已变化后，可以单独确认旧本机进程资源已释放：账本保留`resource_reconciliation`证明，命令仍为`outcome_unknown`，不重写原runner回执或日志，也不把崩溃后的日志冒充完整终态产物。同boot、无boot、身份不符或无可信启动意图不自动释放。无boot的历史记录仅能经用户明确确认归属后，由维护流程调用`reconcile_after_reboot(..., legacy_prior_boot_id=...)`核对；时间戳只作佐证，不自动推断旧boot。该维护方法不是模型工具。
 
 当前持久命令驱动仅 Linux 开放；Windows/macOS 的 `start_command` 和统一后的 `exec_command` 均明确 unsupported，不再保留旧 bounded exec_command 绕过路径。NativeDriver 是窄替换边界；Windows 需可验证独占 Job Object 及可靠后代退出收据，macOS 需可靠 fork/daemon 后代归属与清理证明后才能开放，不能用进程名/killpg 或“只杀根进程”替代。
 

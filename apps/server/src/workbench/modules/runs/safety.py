@@ -76,7 +76,15 @@ def observe(run_id: str, operation_id: str, name: str, arguments: dict, result: 
 
 
 def waiting_observation(name, result):
-    if name in {"read_command_output", "file_task_status"}:
+    if name == "read_command_output":
+        command = result.get("command")
+        return (
+            isinstance(command, dict)
+            and command.get("owned_resources_closed") is False
+            and command.get("status")
+            in {"reserved", "running", "starting", "launching", "stopping"}
+        )
+    if name == "file_task_status":
         return result.get("status") in {"queued", "running", "starting", "launching"}
     if name in {"inspect_agents", "wait_agents"}:
         return any(

@@ -5,6 +5,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints, model_validator
 
+from workbench.contracts.command_limits import (
+    DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    MAX_COMMAND_TIMEOUT_SECONDS,
+)
 from workbench.modules.models.profile import Declaration, Generation
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
@@ -96,6 +100,10 @@ class InputPlan(Command):
 class RunOptions(Command):
     sandbox_profile: Literal["native_scoped", "linux_bwrap"] = "native_scoped"
     approval_mode: Literal["smart", "manual"] = "smart"
+    review_reasoning_effort: Literal["default", "disabled", "low", "medium", "xhigh"] = "low"
+    command_timeout_seconds: int = Field(
+        default=DEFAULT_COMMAND_TIMEOUT_SECONDS, ge=1, le=MAX_COMMAND_TIMEOUT_SECONDS, strict=True
+    )
     child_agent_limit: int = Field(default=3, ge=0, le=3, strict=True)
     checkpoint_rounds: int = Field(default=32, ge=1, le=128, strict=True)
     max_model_rounds: int = Field(default=65536, ge=1, le=65536, strict=True)
@@ -108,6 +116,10 @@ class RunOptions(Command):
 class RunOptionOverrides(Command):
     sandbox_profile: Literal["native_scoped", "linux_bwrap"] | None = None
     approval_mode: Literal["smart", "manual"] | None = None
+    review_reasoning_effort: Literal["default", "disabled", "low", "medium", "xhigh"] | None = None
+    command_timeout_seconds: int | None = Field(
+        default=None, ge=1, le=MAX_COMMAND_TIMEOUT_SECONDS, strict=True
+    )
     child_agent_limit: int | None = Field(default=None, ge=0, le=3, strict=True)
     checkpoint_rounds: int | None = Field(default=None, ge=1, le=128, strict=True)
     max_model_rounds: int | None = Field(default=None, ge=1, le=65536, strict=True)
@@ -126,7 +138,8 @@ class RunCreate(Command):
     input: Annotated[str, StringConstraints(min_length=1, max_length=1048576)]
     model_connection_id: UUID | None = None
     expected_model: ModelSelectionGuard | None = None
-    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None
+    # "disabled" is a task choice; the adapter clears effort and disables thinking.
+    reasoning_effort: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
     request_id: UUID
     deadline_seconds: int | None = Field(default=None, ge=1, le=604800, strict=True)
     attachments: list[AttachmentInput] = Field(default_factory=list, max_length=8)

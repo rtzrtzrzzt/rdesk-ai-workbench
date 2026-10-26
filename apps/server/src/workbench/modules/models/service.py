@@ -9,6 +9,7 @@ from workbench.infrastructure.database import now
 from workbench.infrastructure.secrets import decrypt, encrypt
 from workbench.modules.models.domain import ModelConnection, ModelRevision
 from workbench.modules.models.engine_adapters import (
+    reasoning_choices,
     supported_reasoning_efforts,
     validate_generation,
 )
@@ -36,6 +37,14 @@ def view(row: ModelConnection) -> dict:
         "adapter_routes": adapter_route_matrix(row.provider_type),
         "generation": Generation.model_validate(row.generation or {}).model_dump(mode="json"),
         "reasoning_efforts": supported_reasoning_efforts(
+            {
+                "provider_type": row.provider_type,
+                "endpoint": row.endpoint,
+                "model_identifier": row.model_identifier,
+                "generation": row.generation or {},
+            }
+        ),
+        "reasoning_choices": reasoning_choices(
             {
                 "provider_type": row.provider_type,
                 "endpoint": row.endpoint,

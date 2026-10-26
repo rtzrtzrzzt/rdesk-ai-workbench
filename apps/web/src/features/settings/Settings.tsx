@@ -1,7 +1,24 @@
-import { useState } from 'react'
-import { SettingsGroup } from './SettingsGroup'
+import { useCallback, useState } from 'react'
+import { SettingsPanel, useSettingsAttention } from './SettingsGroup'
+import type { ExperiencePreferences } from './useExperiencePreferences'
 import './settings.css'
-import { Monitor, Moon, Sun, Shield, Server, RefreshCw } from 'lucide-react'
+import {
+  Monitor,
+  Moon,
+  Sun,
+  Shield,
+  Server,
+  RefreshCw,
+  Settings2,
+  Palette,
+  ListChecks,
+  FolderOpen,
+  Database,
+  SlidersHorizontal,
+  FileText,
+  Package,
+  ImagePlus,
+} from 'lucide-react'
 import { Dialog } from '../../components/Dialog'
 import { ModelForm } from './ModelForm'
 import { Capabilities } from './Capabilities'
@@ -11,6 +28,11 @@ import { Vault } from './Vault'
 import { AccountSecurity } from './AccountSecurity'
 import { WorkspaceRuntimeDefaults } from './WorkspaceRuntimeDefaults'
 import { Diagnostics } from './Diagnostics'
+import { ComputerControl } from './ComputerControl'
+import { ConversationHistory } from './ConversationHistory'
+import { RulesPanel } from '../memory/MemoryPage'
+import { ExtensionsPage } from '../extensions/ExtensionsPage'
+import { MediaConnectionsPanel } from '../media/MediaConnectionsPanel'
 import type {
   ModelInput,
   ModelConnection,
@@ -24,75 +46,280 @@ export function SettingsPage({
   userId,
   workspace,
   models = [],
+  experience,
 }: {
   userId?: string
   workspace?: Workspace
   models?: ModelConnection[]
+  experience: ExperiencePreferences
 }) {
-  const [theme, setTheme] = useState(() => localStorage.getItem('workbench.theme') ?? 'system')
-  function changeTheme(value: string) {
-    setTheme(value)
-    localStorage.setItem('workbench.theme', value)
-    document.documentElement.dataset.theme = value
-  }
+  const [category, setCategory] = useState('general')
+  const [attention, setAttention] = useState<Record<string, boolean>>({})
+  const reportAttention = useCallback((id: string, active: boolean) => {
+    setAttention((previous) => (previous[id] === active ? previous : { ...previous, [id]: active }))
+  }, [])
+  const { theme, input_mode: inputMode } = experience.values
+  const inputModeLocked = experience.inputLocked
+  const preferenceDisabled =
+    !experience.ready || experience.busy || experience.pending || experience.conflict
+  const categories = [
+    { id: 'general', title: '通用', description: '日常聊天和消息发送偏好。', icon: Settings2 },
+    { id: 'appearance', title: '外观', description: '选择工作台的显示主题。', icon: Palette },
+    ...(userId
+      ? [
+          {
+            id: 'tasks',
+            title: '任务偏好',
+            description: '为新任务设置默认模型与执行方式。',
+            icon: ListChecks,
+          },
+          ...(workspace
+            ? [
+                {
+                  id: 'workspace',
+                  title: '当前工作区',
+                  description: `仅对「${workspace.name}」的新任务生效。`,
+                  icon: FolderOpen,
+                },
+              ]
+            : []),
+          {
+            id: 'rules',
+            title: '全局规则',
+            description: '编辑对所有工作区生效的 AGENTS.md。',
+            icon: FileText,
+          },
+          {
+            id: 'security',
+            title: '连接与安全',
+            description: '管理本机会话和模型凭据。',
+            icon: Shield,
+          },
+          {
+            id: 'extensions',
+            title: '插件与 Skill',
+            description: '安装和管理本机扩展，选择全局或当前工作区使用。',
+            icon: Package,
+          },
+          {
+            id: 'media-models',
+            title: '生成模型',
+            description: '接入图像、视频、音频和 3D 生成模型。',
+            icon: ImagePlus,
+          },
+          {
+            id: 'maintenance',
+            title: '数据与维护',
+            description: '备份、隔离恢复与临时文件清理。',
+            icon: Database,
+          },
+          {
+            id: 'advanced',
+            title: '高级',
+            description: '服务状态和诊断信息。',
+            icon: SlidersHorizontal,
+          },
+        ]
+      : []),
+  ]
+  const selected = categories.some((item) => item.id === category) ? category : 'general'
   return (
     <div className="page-content settings-page">
-      <PageHeading title="设置">调整工作台的外观与使用偏好。</PageHeading>
-      <section className="settings-section">
-        <div>
-          <h2>外观</h2>
-          <p>仅影响当前浏览器，立即生效。</p>
-        </div>
-        <div className="segmented" role="group" aria-label="外观主题">
-          {[
-            { id: 'light', name: '浅色', icon: Sun },
-            { id: 'dark', name: '深色', icon: Moon },
-            { id: 'system', name: '跟随系统', icon: Monitor },
-          ].map((item) => (
+      <PageHeading title="设置">按需调整工作台的使用方式。</PageHeading>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="设置分类">
+          {categories.map((item) => (
             <button
               key={item.id}
-              aria-pressed={theme === item.id}
-              onClick={() => changeTheme(item.id)}
+              type="button"
+              aria-current={selected === item.id ? 'page' : undefined}
+              aria-controls={`settings-${item.id}`}
+              onClick={() => setCategory(item.id)}
             >
-              <item.icon size={15} />
-              {item.name}
+              <item.icon size={16} aria-hidden="true" />
+              <span>{item.title}</span>
+              {attention[item.id] && (
+                <span className="settings-nav-attention" aria-label="有待处理事项" />
+              )}
             </button>
           ))}
+        </nav>
+        <div className="settings-panels">
+          {categories.map((item) => (
+            <SettingsPanel
+              key={item.id}
+              {...item}
+              active={selected === item.id}
+              onAttentionChange={reportAttention}
+            >
+              {item.id === 'general' && (
+                <section className="settings-preference">
+                  <div>
+                    <h3>运行中发送消息</h3>
+                    <p>选择 AI 工作时，新消息如何处理。保存到账户后，各浏览器会同步生效。</p>
+                  </div>
+                  <label className="settings-follow-up">
+                    <span className="sr-only">运行中消息的默认行为</span>
+                    <select
+                      aria-label="运行中消息的默认行为"
+                      value={inputMode}
+                      disabled={inputModeLocked || preferenceDisabled}
+                      onChange={(event) =>
+                        void experience.change({
+                          input_mode: event.target.value as 'queue' | 'steer',
+                        })
+                      }
+                    >
+                      <option value="queue">排入队列</option>
+                      <option value="steer">引导当前任务</option>
+                    </select>
+                  </label>
+                  <p className="settings-preference-help">
+                    {inputMode === 'queue'
+                      ? '当前任务完成后再处理新消息。排队消息可在输入框上方编辑、排序、删除，也可点击「立即引导」调整当前任务。'
+                      : '文字消息会尽快补充到当前任务，已开始的工具会先执行到安全边界。任务结束后发送的消息会正常开启下一轮。'}
+                  </p>
+                  {inputModeLocked && (
+                    <p className="page-note" role="status">
+                      消息正在发送或结果待核对，处理完成后可更改此项。
+                    </p>
+                  )}
+                  {experience.deferred && (
+                    <p className="page-note" role="status">
+                      账户默认行为已更新，将在本次发送或待核对请求处理完成后应用。
+                    </p>
+                  )}
+                  <ExperienceFeedback preferences={experience} />
+                </section>
+              )}
+              {item.id === 'general' && userId && <ConversationHistory userId={userId} />}
+              {item.id === 'general' && userId && <ComputerControl />}
+              {item.id === 'appearance' && (
+                <section className="settings-preference">
+                  <div>
+                    <h3>主题</h3>
+                    <p>保存到账户后，各浏览器会同步生效。</p>
+                  </div>
+                  <div className="segmented" role="group" aria-label="外观主题">
+                    {(
+                      [
+                        { id: 'light', name: '浅色', icon: Sun },
+                        { id: 'dark', name: '深色', icon: Moon },
+                        { id: 'system', name: '跟随系统', icon: Monitor },
+                      ] as const
+                    ).map((themeOption) => (
+                      <button
+                        key={themeOption.id}
+                        aria-pressed={theme === themeOption.id}
+                        disabled={preferenceDisabled}
+                        onClick={() => void experience.change({ theme: themeOption.id })}
+                      >
+                        <themeOption.icon size={15} />
+                        {themeOption.name}
+                      </button>
+                    ))}
+                  </div>
+                  <ExperienceFeedback preferences={experience} />
+                </section>
+              )}
+              {item.id === 'tasks' && <RuntimeDefaults models={models} />}
+              {item.id === 'rules' &&
+                (workspace ? (
+                  <RulesPanel workspace={workspace} active={selected === 'rules'} globalOnly />
+                ) : (
+                  <p className="page-note">先创建或选择一个工作区，即可编辑用户全局 AGENTS.md。</p>
+                ))}
+              {item.id === 'workspace' && workspace && (
+                <WorkspaceRuntimeDefaults
+                  key={workspace.id}
+                  workspace={workspace}
+                  models={models}
+                />
+              )}
+              {item.id === 'security' && userId && (
+                <>
+                  <AccountSecurity key={`account-${userId}`} userId={userId} />
+                  <Vault key={`vault-${userId}`} userId={userId} />
+                  <p className="page-note">
+                    文件和工具权限由当前工作区管理；模型服务在「模型与连接」中配置。
+                  </p>
+                </>
+              )}
+              {item.id === 'extensions' &&
+                userId &&
+                (workspace ? (
+                  <ExtensionsPage
+                    key={`${userId}:${workspace.id}`}
+                    userId={userId}
+                    workspace={workspace}
+                    active={selected === 'extensions'}
+                  />
+                ) : (
+                  <p className="page-note">先创建或选择一个工作区，即可检查和安装插件与 Skill。</p>
+                ))}
+              {item.id === 'media-models' &&
+                (workspace ? (
+                  <MediaConnectionsPanel
+                    key={workspace.id}
+                    workspace={workspace}
+                    active={selected === 'media-models'}
+                  />
+                ) : (
+                  <p className="page-note">先创建或选择一个工作区，即可接入生成模型。</p>
+                ))}
+              {item.id === 'maintenance' && userId && <Maintenance key={userId} userId={userId} />}
+              {item.id === 'advanced' && <Diagnostics />}
+            </SettingsPanel>
+          ))}
         </div>
-      </section>
-      {userId && (
+      </div>
+    </div>
+  )
+}
+
+function ExperienceFeedback({ preferences }: { preferences: ExperiencePreferences }) {
+  const needsAttention = preferences.pending || preferences.conflict || preferences.draft
+  useSettingsAttention('experience', needsAttention, '账户偏好有待核对或未保存的修改')
+  return (
+    <div>
+      <p className="page-note" role="status">
+        {preferences.busy
+          ? '正在保存或核对账户偏好…'
+          : preferences.message || (!preferences.ready ? '正在读取账户偏好…' : '')}
+      </p>
+      {preferences.pending ? (
+        <Button disabled={preferences.busy} onClick={() => void preferences.retry()}>
+          核对本次保存
+        </Button>
+      ) : (
         <>
-          <SettingsGroup title="任务偏好" description="为新任务选择默认模型、执行方式与协作规模。">
-            <RuntimeDefaults models={models} />
-            {workspace && (
-              <WorkspaceRuntimeDefaults key={workspace.id} workspace={workspace} models={models} />
-            )}
-          </SettingsGroup>
-          <SettingsGroup title="连接与安全" description="本机会话与模型凭据保护。">
-            <AccountSecurity key={`account-${userId}`} userId={userId} />
-            <Vault key={`vault-${userId}`} userId={userId} />
-            <section className="settings-section settings-guidance">
-              <div>
-                <h2>工作区与权限</h2>
-                <p>
-                  文件目录、外部传输和工具权限由当前工作区管理。模型服务在「模型与连接」中配置。
-                </p>
-              </div>
-              <Shield size={20} className="muted" />
-            </section>
-          </SettingsGroup>
-          <SettingsGroup title="备份与维护" description="创建备份、建立隔离副本或清理临时文件。">
-            <Maintenance key={userId} userId={userId} />
-          </SettingsGroup>
-          <SettingsGroup title="高级" description="查看真实服务状态与导出脱敏诊断。">
-            <Diagnostics />
-            <p className="page-note">未发送的消息只保留在当前页面，凭据不会写入浏览器存储。</p>
-          </SettingsGroup>
+          {(preferences.message || preferences.conflict) && (
+            <Button disabled={preferences.busy} onClick={() => void preferences.reload()}>
+              读取最新设置
+            </Button>
+          )}
+          {preferences.draft && (
+            <>
+              <Button
+                disabled={preferences.busy || preferences.conflict || !preferences.ready}
+                onClick={() => void preferences.saveDraft()}
+              >
+                保存保留的修改
+              </Button>
+              <Button disabled={preferences.busy} onClick={preferences.discardDraft}>
+                放弃未保存修改
+              </Button>
+            </>
+          )}
+          {preferences.uninitialized && !preferences.busy && preferences.message && (
+            <Button onClick={() => void preferences.initialize()}>迁移本机偏好到账户</Button>
+          )}
         </>
       )}
     </div>
   )
 }
+
 export function ConnectionsPage({
   models = [],
   onRefresh,

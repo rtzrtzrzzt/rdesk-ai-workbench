@@ -108,6 +108,7 @@ def local_only_source(db, row: Artifact) -> bool:
             or row.user_id != owner
             or row.workspace_id != workspace
             or row.kind == "screenshot"
+            or row.metadata_json.get("local_only_source")
             or row.metadata_json.get("automation_session_id")
         ):
             return True
@@ -282,8 +283,21 @@ def validate_attachments(
     return result
 
 
-def read_artifact_text(db, user_id, workspace_id, identifier, start=1, limit=100) -> dict:
+def read_artifact_text(
+    db,
+    user_id,
+    workspace_id,
+    identifier,
+    start=1,
+    limit=100,
+    *,
+    start_character=0,
+    max_chars=8000,
+    expected_version=None,
+) -> dict:
     row = get_artifact(db, user_id, workspace_id, identifier)
+    if expected_version is not None and expected_version != row.content_hash:
+        raise AppError("artifact_version_changed", "文件在续读前已改变，请重新读取。", 409)
     context_dependencies = []
     if row.kind == "task_state" and row.metadata_json.get("semantic_summary"):
         from workbench.modules.context.window import memory_fingerprint
@@ -326,6 +340,23 @@ def read_artifact_text(db, user_id, workspace_id, identifier, start=1, limit=100
         )
     lines = text.splitlines()
     selected = "\n".join(lines[start - 1 : start - 1 + limit])
+    if start_character > (len(lines[start - 1]) if start <= len(lines) else 0):
+        raise AppError("invalid_character_offset", "字符位置超出当前行，请重新读取。", 422)
+    piece = selected[start_character : start_character + max_chars]
+    consumed = start_character + len(piece)
+    next_read = None
+    if consumed < len(selected):
+        prefix = selected[:consumed]
+        next_read = {
+            "start_line": start + prefix.count("\n"),
+            "start_character": len(prefix.rsplit("\n", 1)[-1]),
+        }
+    elif start - 1 + limit < len(lines):
+        next_read = {"start_line": start + limit, "start_character": 0}
+    if next_read is not None:
+        next_read.update(
+            artifact_id=row.id, limit=limit, max_chars=max_chars, expected_version=row.content_hash
+        )
     return {
         "artifact_id": row.id,
         "version": row.content_hash,
@@ -333,8 +364,9 @@ def read_artifact_text(db, user_id, workspace_id, identifier, start=1, limit=100
         "parent_id": row.parent_id,
         "start_line": start,
         "total_lines": len(lines),
-        "text": selected[:8000],
-        "truncated": len(selected) > 8000 or start - 1 + limit < len(lines),
+        "text": piece,
+        "truncated": next_read is not None,
+        "next": next_read,
         "complete": complete,
         "warnings": warnings,
         **({"context_memory_dependencies": context_dependencies} if context_dependencies else {}),

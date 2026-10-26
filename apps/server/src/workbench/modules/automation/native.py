@@ -81,6 +81,7 @@ class GovernedBrowser(BrowserService):
             row.kind != "browser"
             or command.allowed_origins != policy.browser_origins
             or command.local_origins != policy.browser_local_origins
+            or command.allow_public_network != policy.browser_public_network
         ):
             from workbench.modules.automation.policy import denied
 
@@ -116,7 +117,9 @@ class GovernedDesktop(DesktopService):
             or grant.control != config.desktop_control
             or grant.target_window_id != config.target_window_id
             or grant.target_window_pid != config.target_window_pid
-            or grant.expires_at != policy.grant_expires_at
+            or grant.all_windows != config.desktop_all_windows
+            or grant.expires_at
+            != (row.expires_at if config.desktop_all_windows else policy.grant_expires_at)
             or command.manual_takeover_ack != config.manual_takeover_ack
         ):
             from workbench.modules.automation.policy import denied

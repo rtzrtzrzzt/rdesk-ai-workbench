@@ -11,10 +11,15 @@ export type AutomationAction = components['schemas']['ActionView']
 export type BrowserAction = components['schemas']['BrowserAction']
 export type BrowserDownload = components['schemas']['BrowserDownload']
 export type DesktopAction = components['schemas']['DesktopAction']
+export type ComputerSettings = components['schemas']['ComputerSettingsView']
+type ComputerSettingsSave = components['schemas']['ComputerSettingsSave']
 type RuntimeView = components['schemas']['RuntimeView']
 const root = (workspaceId: string) => `/workspaces/${encodeURIComponent(workspaceId)}/automation`
 const post = (body: unknown) => ({ method: 'POST', body: JSON.stringify(body) })
 export const automationApi = {
+  settings: () => request<ComputerSettings>('/automation/settings'),
+  saveSettings: (input: ComputerSettingsSave) =>
+    request<ComputerSettings>('/automation/settings', post(input)),
   policy: (wid: string) => request<AutomationPolicy>(`${root(wid)}/policy`),
   save: (wid: string, input: AutomationSave) =>
     request<AutomationPolicy>(`${root(wid)}/policy`, post(input)),

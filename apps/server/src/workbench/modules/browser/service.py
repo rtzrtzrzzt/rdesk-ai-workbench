@@ -225,7 +225,12 @@ class BrowserService:
             raise error(
                 "browser_not_enabled", "浏览器尚未显式启用或缺少用户授权。", 403, "permission"
             )
-        policy = NetworkPolicy(command.allowed_origins, command.local_origins, self.trusted_local)
+        policy = NetworkPolicy(
+            command.allowed_origins,
+            command.local_origins,
+            self.trusted_local,
+            allow_public=command.allow_public_network,
+        )
         async with self.create_lock:
             create_id = str(command.request_id)
             signature = digest(command)
@@ -294,6 +299,7 @@ class BrowserService:
                     expires_at=now() + timedelta(seconds=command.ttl_seconds),
                     allowed_origins=sorted(policy.public),
                     local_origins=sorted(policy.local),
+                    allow_public_network=policy.allow_public,
                 )
                 session = ManagedSession(
                     owner,
@@ -571,6 +577,9 @@ class BrowserService:
                             403,
                             "permission",
                         )
+                    # DNS/DOM awaits may outlive a permission change. Governed
+                    # services re-read live authority at the effect boundary.
+                    self._session(owner, str(command.session_id))
                     invoked = True
                     timeout = session.timeout * 1000
                     if command.kind == "navigate":
@@ -593,9 +602,11 @@ class BrowserService:
                             box = await target.bounding_box()
                             if box is None:
                                 raise error("browser_ref_stale", "滚动目标已不可见。")
+                            self._session(owner, str(command.session_id))
                             await session.page.mouse.move(
                                 box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
                             )
+                        self._session(owner, str(command.session_id))
                         await session.page.mouse.wheel(0, command.delta_y)
                     await self._invalidate(session)
                     status = "executed"

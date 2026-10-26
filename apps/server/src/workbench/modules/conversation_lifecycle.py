@@ -18,6 +18,8 @@ def rename(db, user_id, thread_id, values):
         if not title:
             raise AppError("invalid_title", "请填写会话名称。", 422)
         thread.title, thread.version = title, thread.version + 1
+        thread.title_source = "manual"
+        thread.title_naming = {"state": "cancelled"} if thread.title_naming else {}
         return conversations.thread_view(thread, db)
 
     return runs.idempotent(
@@ -68,6 +70,7 @@ def edit(db, user_id, thread_id, values, *, inherit_attachments):
             user_id=user_id,
             workspace_id=source.workspace_id,
             title=source.title[:190] + " · 编辑分支",
+            title_source="branch",
             parent_thread_id=source.id,
             fork_message_id=anchor.id,
             fork_include_anchor=False,

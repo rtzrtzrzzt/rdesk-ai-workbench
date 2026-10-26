@@ -243,9 +243,15 @@ def publish_state(state_path, state):
         write_json(state_path, state)
 
 
-def request_stop():
+def request_stop(expected_owner=None):
     with management_lock():
         phase, state = management_state(STATE)
+        if expected_owner is not None and (
+            state.get("runner_pid"),
+            state.get("runner_start"),
+            state.get("boot_id"),
+        ) != tuple(expected_owner):
+            return {"stop_requested": False, "reason": "Launch ownership changed; no signal sent"}
         if phase == "unknown":
             raise RuntimeError("Unknown engine/launch identity; state preserved and no signal sent")
         if phase == "idle":

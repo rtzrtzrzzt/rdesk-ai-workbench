@@ -184,7 +184,12 @@ def _source_upload(db, user_id, workspace_id, command):
 
 
 def create_export(
-    db: Session, user_id: str, workspace_id: str, command: schemas.ExportCreate
+    db: Session,
+    user_id: str,
+    workspace_id: str,
+    command: schemas.ExportCreate,
+    *,
+    actor_run_id: str | None = None,
 ) -> dto.FileTask:
     """Accept one durable file job, preserving actual source; never render in this request."""
     if db.new or db.dirty or db.deleted:
@@ -225,7 +230,16 @@ def create_export(
             processing = schemas.ExportProcessing(
                 request_id=command.request_id, export_spec=command
             )
-            result = files.create_processing(owned, user_id, workspace_id, source_id, processing)
+            actor = None
+            if actor_run_id:
+                from workbench.modules.collaboration.service import lock_root
+
+                _, actor = lock_root(owned, actor_run_id)
+                if actor.cancel_requested_at:
+                    raise AppError("run_finished", "任务已停止，不能创建导出任务。", 409)
+            result = files.create_processing(
+                owned, user_id, workspace_id, source_id, processing, actor=actor
+            )
             run = owned.get(Run, result["id"])
             run.config_snapshot = {**run.config_snapshot, "export_source_refs": references}
             owned.commit()

@@ -219,7 +219,7 @@ def supervise(plan_path: Path, nonce: str) -> int:
     if plan["nonce"] != nonce:
         raise RunnerError("Command plan nonce does not match supervisor.")
     directory = Path(plan["output_dir"])
-    from workbench.modules.processes.native import _json
+    from workbench.modules.processes.native import _json, boot_id
 
     if _json(directory / "launch.json").get("plan") != plan:
         raise RunnerError("Plan does not match the committed launch intent.")
@@ -240,6 +240,7 @@ def supervise(plan_path: Path, nonce: str) -> int:
         "schema": 1,
         "command_id": plan["command_id"],
         "nonce": nonce,
+        "boot_id": boot_id(),
         "status": "starting",
         "exit_code": None,
         "stdout_bytes": 0,
@@ -265,6 +266,7 @@ def supervise(plan_path: Path, nonce: str) -> int:
     desired = None
     stopping_at = None
     kill_sent = False
+    terminal = None
     started = time.monotonic()
     last_saved = started
 
@@ -299,16 +301,40 @@ def supervise(plan_path: Path, nonce: str) -> int:
             with provider_for(plan["sandbox_profile"]).prepare_command(
                 plan["argv"], Path(plan["cwd"]), profile
             ) as prepared:
+                child_options = {}
+                if plan.get("interactive", False):
+                    from workbench.modules.processes.terminal import Terminal, child_terminal
+
+                    terminal = Terminal()
+                    child_options = {
+                        "stdin": terminal.slave,
+                        "stdout": terminal.slave,
+                        "stderr": terminal.slave,
+                        "preexec_fn": child_terminal,
+                    }
+                else:
+                    child_options = {
+                        "stdin": subprocess.DEVNULL,
+                        "stdout": subprocess.PIPE,
+                        "stderr": subprocess.PIPE,
+                    }
                 child = subprocess.Popen(
                     prepared.argv,
                     cwd=prepared.cwd,
                     env=prepared.env,
                     pass_fds=prepared.pass_fds,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
                     close_fds=True,
+                    **child_options,
                 )
+                if terminal:
+                    terminal.child_started()
+                    state.update(
+                        interactive=True,
+                        stderr_merged=True,
+                        terminal_rows=24,
+                        terminal_columns=80,
+                        input_closed=False,
+                    )
                 state["sandbox_profile"] = prepared.capability.provider
                 state["filesystem_isolation"] = prepared.capability.filesystem_isolation
                 state["network_isolation"] = prepared.capability.network_isolation
@@ -320,8 +346,8 @@ def supervise(plan_path: Path, nonce: str) -> int:
                 # No replay: the command may already have run. Cleanup continues.
                 desired = "outcome_unknown"
                 state["reason"] = "Child started but native identity capture failed."
-            for name in ("stdout", "stderr"):
-                stream = getattr(child, name)
+            for name in ("stdout",) if terminal else ("stdout", "stderr"):
+                stream = terminal.stream if terminal else getattr(child, name)
                 os.set_blocking(stream.fileno(), False)
                 selector.register(stream, selectors.EVENT_READ, name)
             state["status"] = "running"
@@ -349,6 +375,9 @@ def supervise(plan_path: Path, nonce: str) -> int:
                     desired = "timed_out"
                 elif driver.root_exit is not None:
                     desired = "completed" if driver.root_exit == 0 else "failed"
+            if terminal:
+                terminal.pump_inputs(directory, plan, accepting=desired is None)
+                state["input_closed"] = terminal.input_closed
             if desired is not None and stopping_at is None:
                 stopping_at = now
                 state["status"] = "stopping"
@@ -361,7 +390,7 @@ def supervise(plan_path: Path, nonce: str) -> int:
                     driver.signal_owned(signal.SIGKILL)
                     kill_sent = True
             for key, _mask in selector.select(0.03):
-                raw = os.read(key.fileobj.fileno(), 65536)
+                raw = terminal.read(65536) if terminal else os.read(key.fileobj.fileno(), 65536)
                 if not raw:
                     selector.unregister(key.fileobj)
                     key.fileobj.close()
@@ -424,6 +453,8 @@ def supervise(plan_path: Path, nonce: str) -> int:
         for key in list(selector.get_map().values()):
             key.fileobj.close()
         selector.close()
+        if terminal:
+            terminal.close()
         for stream in logs.values():
             stream.flush()
             os.fsync(stream.fileno())

@@ -17,6 +17,13 @@ export const runOptionFields: {
   max: number
   integer: boolean
 }[] = [
+  {
+    key: 'command_timeout_seconds',
+    label: '单条命令最长执行秒数',
+    min: 1,
+    max: 86400,
+    integer: true,
+  },
   { key: 'child_agent_limit', label: '子 Agent 名额上限', min: 0, max: 3, integer: true },
   { key: 'checkpoint_rounds', label: '阶段检查点模型轮数', min: 1, max: 128, integer: true },
   { key: 'max_model_rounds', label: '单任务模型轮数预算', min: 1, max: 65536, integer: true },
@@ -46,7 +53,10 @@ export function validRunOptions(value: RunOptions) {
   return (
     runOptionFields.every((field) => validOption(field.key, value[field.key])) &&
     (value.sandbox_profile === 'native_scoped' || value.sandbox_profile === 'linux_bwrap') &&
-    (value.approval_mode === 'smart' || value.approval_mode === 'manual')
+    (value.approval_mode === 'smart' || value.approval_mode === 'manual') &&
+    ['default', 'disabled', 'low', 'medium', 'xhigh'].includes(
+      value.review_reasoning_effort ?? 'low',
+    )
   )
 }
 export function validOverrides(value: RunOptionOverrides) {
@@ -57,12 +67,49 @@ export function validOverrides(value: RunOptionOverrides) {
     (value.approval_mode == null ||
       value.approval_mode === 'smart' ||
       value.approval_mode === 'manual') &&
+    (value.review_reasoning_effort == null ||
+      ['default', 'disabled', 'low', 'medium', 'xhigh'].includes(value.review_reasoning_effort)) &&
     runOptionFields.every(
       (field) =>
         value[field.key] === undefined ||
         value[field.key] === null ||
         validOption(field.key, value[field.key]),
     )
+  )
+}
+export function ReviewEffortSelect({
+  value,
+  onChange,
+  disabled,
+  inherit = false,
+}: {
+  value: RunOptions['review_reasoning_effort'] | null | undefined
+  onChange: (value: RunOptions['review_reasoning_effort'] | null) => void
+  disabled: boolean
+  inherit?: boolean
+}) {
+  return (
+    <label>
+      审核思考强度
+      <select
+        aria-label="审核思考强度"
+        value={value ?? (inherit ? '' : 'low')}
+        disabled={disabled}
+        onChange={(event) =>
+          onChange((event.target.value || null) as RunOptions['review_reasoning_effort'] | null)
+        }
+      >
+        {inherit && <option value="">继承用户 / 系统</option>}
+        <option value="disabled">关闭思考</option>
+        <option value="low">低</option>
+        <option value="medium">中</option>
+        <option value="xhigh">极高</option>
+        <option value="default">沿用模型连接默认</option>
+      </select>
+      <small className="muted">
+        独立于主任务，仅新任务生效；关闭时直接生成审核结论。没有已确认参数适配的模型沿用连接默认。
+      </small>
+    </label>
   )
 }
 export function sourceLabel(source: string | undefined) {
@@ -100,8 +147,19 @@ export function RunOptionsFields({
           <option value="manual">手动审批</option>
         </select>
       </label>
-      <details className="runtime-advanced">
+      <p className="page-note">智能审批自动允许或拒绝操作；无法确认或审核失败时拒绝，不转人工。</p>
+      <details className="runtime-advanced" open>
         <summary>高级任务预算与执行设置</summary>
+        <p className="page-note">
+          普通命令和长命令共用时间预算；AI 可为单次操作选择更短时限。修改对新任务生效。
+        </p>
+        <ReviewEffortSelect
+          value={value.review_reasoning_effort}
+          disabled={disabled}
+          onChange={(review_reasoning_effort) =>
+            onChange({ ...value, review_reasoning_effort: review_reasoning_effort ?? 'low' })
+          }
+        />
         <div className="run-option-fields">
           {runOptionFields.map((field) => (
             <label key={field.key}>
@@ -180,7 +238,7 @@ export function EffectiveDefaults({
 }) {
   const model = models.find((item) => item.id === effective.model_connection_id)
   return (
-    <details className="runtime-effective">
+    <details className="runtime-effective" open>
       <summary>服务端解析后的当前有效配置与来源</summary>
       <dl className="run-meta">
         {runOptionFields.map((field) => (

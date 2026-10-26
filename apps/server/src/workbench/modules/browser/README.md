@@ -4,7 +4,7 @@
 
 ## 启动与边界
 
-默认未启用。Linux 本机辅助启动命令：
+底层 standalone 服务默认未启用。工作台产品层自2026-10-19起采用默认开启的用户级电脑总开关；开启后由host注入`allow_public_network=true`，可访问公网HTTP(S)目标，无需逐个填域名。关闭即时撤销所有工作区的旧会话，重新开启不复活。AI创建、观察及动作仍经独立本地审核；模型不能用工具参数扩大权限，截图不外传。以下独立辅助入口仍需明确启用：
 
 ```sh
 .venv/bin/python -m workbench.modules.browser.entrypoint \
@@ -12,7 +12,7 @@
   --trusted-local-origin http://127.0.0.1:8766
 ```
 
-`trusted_local_origins` 产品默认空列表；上例仅是本轮真实验收页面的明确授权，不是内置 localhost 许可。会话 `local_origins` 必须是管理员配置的精确 origin 子集；公开网页 `allowed_origins` 也必须由主应用从用户已批准的 grant 注入，禁止把模型提供的 `enabled=true` 或 origin 当成用户批准。双方均未启用时不能创建会话。范围是完整 scheme/host/port，不能通配或暗中扩大到子域。
+`trusted_local_origins` 产品默认空列表；上例仅是此前真实验收页面的明确授权，不是内置 localhost 许可。会话 `local_origins` 必须是管理员配置的精确 origin 子集；旧精确授权模式的 `allowed_origins` 同样由host注入，范围是完整scheme/host/port。全局公网模式也是从持久用户设置产生，IPC与创建参数必须一致，禁止把模型提供的`enabled=true`或origin当成用户批准。底层双方未启用时不能创建会话。
 
 产品使用主 launcher 的 automation companion，通过现有私有 transport 绑定端点：Linux/macOS 为0600 UDS，Windows为127.0.0.1随机端口加高熵token与当前用户原生ACL。客户端核验endpoint元数据权限、真实PID/create_time/executable/instance nonce，每次私有请求认证，不接受任意远程endpoint。Windows传输已有实现但本轮无实机验证，不能据此声称Windows浏览器能力已验收。模块 standalone main 仍仅POSIX，预绑定0600 socket传fd，避免Uvicorn便利路径chmod0666；它不生成主launcher身份metadata。已有或未知归属socket不覆盖；异常退出只在严格证明原进程已退出且record/inode仍匹配时清理传输，不据此声称业务会话已关闭。Linux已实测；macOS浏览器组合等待真实设备验证。没有公开CDP入口。
 
@@ -31,7 +31,7 @@
 
 `BrowserOwner(user_id,workspace_id,run_id=None)` 必须由可信调用方注入，UUID；同会话每次完全匹配身份。companion不访问DB，主入口须先校验这些实体归属/当前有效授权；Agent参数不能自报这些值。独立进程内 `BrowserService` 提供同名方法（observe需显式command）。导入不会启动进程。
 
-`BrowserCreate`：request_id(UUID)、enabled=false、allowed_origins=[]、local_origins=[]、timeout_seconds=20(1..60)、ttl_seconds=900(30..3600)。最多4个活动会话（可信启动配置上限8），每进程最多256条会话历史。重传同create请求返回同会话；参数/身份不同409，不重新启动浏览器。
+`BrowserCreate`：request_id(UUID)、enabled=false、allowed_origins=[]、local_origins=[]、allow_public_network=false、timeout_seconds=20(1..60)、ttl_seconds=900(30..3600)。`allow_public_network`由host按真实用户设置注入，不是模型可自授的网络许可。最多4个活动会话（可信启动配置上限8），每进程最多256条会话历史。重传同create请求返回同会话；参数/身份不同409，不重新启动浏览器。
 
 `BrowserObservation`：session_id、observation_id(UUID字符串)、generation、captured_at、url/title/text、truncated、elements[{ref,tag,role,name,input_type,href}]、screenshot_path/width/height(nullable)、blocked_requests、scope=main_frame。纯文本最多32000字符，最多200个可见交互元素，名称最多240字符。ref是当前观察的受管ElementHandle；`page` 是导航/页滚动/页键盘目标。不提供任意selector、坐标或调用者JS；内部只有固定DOM读取与检查脚本。iframe没有假造定位引用，不声称完整无障碍树。
 
@@ -45,7 +45,7 @@ stop绕过动作锁，先拒绝新输入并取消本会话动作，关闭其代�
 
 ## 网络控制及其实际边界
 
-每会话独立随机回环 HTTP/CONNECT proxy，Chrome明确指定且无DIRECT fallback，取消隐式loopback bypass。代理每次解析目标，拒绝任一非公网答案并直接连接选定的数字IP；HTTPS仍由Chrome用原域名执行TLS证书验证，代理不解密。每个HTTP请求/CONNECT、页面route/重定向/子资源再次检查精确origin。公网只允许HTTP(S)标准端口，拒绝loopback/private/linklocal/metadata/保留/过渡地址；本机仅精确授权origin，且其 `/api`（包含规范化/编码路径）一律拒绝，不能碰工作台自己的API。
+每会话独立随机回环 HTTP/CONNECT proxy，Chrome明确指定且无DIRECT fallback，取消隐式loopback bypass。代理每次解析目标，拒绝任一非公网答案并直接连接选定的数字IP；HTTPS仍由Chrome用原域名执行TLS证书验证，代理不解密。每个HTTP请求/CONNECT、页面route/重定向/子资源再次检查网络范围。旧精确授权模式限标准端口与既有origin；全局公网模式允许公开HTTP(S)目标及非标准端口，仍拒绝loopback/private/linklocal/metadata/保留/过渡地址。本机仅精确授权origin，且其 `/api`（包含规范化/编码路径）一律拒绝，不能碰工作台自己的API。
 
 关闭Service Worker、WebSocket、弹窗、Chrome自动下载、浏览器扩展、QUIC及非代理WebRTC UDP；固定init脚本移除WebRTC构造入口。HTTP明文代理拒绝chunked请求/Upgrade、单请求body最多2MiB、关闭复用以避免换目标；每会话网络总量128MiB、并发连接24、连接生命周期120秒。参数均以库调用传递，无shell拼接。浏览器与代理不读取应用vault或工具环境，页面没有后端工具bridge。
 
@@ -68,9 +68,9 @@ Ubuntu24.04 ARM64，已安装Playwright1.64.0，实际启动Chrome155.0.8059.84�
 
 `BrowserSession.downloads_enabled=false` 专指 Chrome 自动下载继续关闭，`accept_downloads=False` 和 page download cancel 保持生效。新增 `explicit_download_supported=true` 表示实现独立显式静态链接下载，并不表示可读取需网页登录、POST、Blob、data URL 或 JavaScript 生成的下载。
 
-`BrowserDownload` 严格字段是 `request_id:UUID, last_observation:UUID, target_ref:e<digits>, output_dir:str`。目标必须是当前观察已有的真实 HTML `a.href`；没有 URL、任意 selector、JS 或请求 headers 参数。观察内部按 ref 保存当时真实 href，`BrowserElement.href` 仅公开 HTTP(S)、无 userinfo 且现有精确 origin policy 通过的规范目标（去 fragment），其余为 null。主应用可按持久 observation/ref 冻结审批显示；实际执行仍重新核对观察、DOM revision、导航世代、连接性与完整 href。href、DOM 或导航变化即拒绝，不能猜测替代链接。
+`BrowserDownload` 严格字段是 `request_id:UUID, last_observation:UUID, target_ref:e<digits>, output_dir:str`。目标必须是当前观察已有的真实 HTML `a.href`；没有 URL、任意 selector、JS 或请求 headers 参数。观察内部按 ref 保存当时真实 href，`BrowserElement.href` 仅公开 HTTP(S)、无 userinfo 且当前会话网络策略通过的规范目标（去 fragment），其余为 null。主应用可按持久 observation/ref 冻结审批显示；实际执行仍重新核对观察、DOM revision、导航世代、连接性与完整 href。href、DOM 或导航变化即拒绝，不能猜测替代链接。
 
-下载复用本会话 `SessionProxy.address`，仅连接其随机 127.0.0.1 代理；每一跳再次做原 `NetworkPolicy` 验证，代理对新连接重新解析并检查全部地址答案、拨号数字 IP。HTTPS URL 保留原始域名，由 HTTPX 在 CONNECT 隧道中做 TLS/SNI/证书验证。重定向只手动接受 301/302/303/307/308，最多 3 跳，每跳仍在用户已授权的精确 origin 集内，不能跳到新的内网地址或自身 API。没有 DIRECT、环境代理或更换 DNS 的回退。
+下载复用本会话 `SessionProxy.address`，仅连接其随机 127.0.0.1 代理；每一跳再次做原 `NetworkPolicy` 验证，代理对新连接重新解析并检查全部地址答案、拨号数字 IP。HTTPS URL 保留原始域名，由 HTTPX 在 CONNECT 隧道中做 TLS/SNI/证书验证。重定向只手动接受 301/302/303/307/308，最多 3 跳，每跳仍须满足用户授权的会话网络范围（精确origin或全局公网模式），不能跳到未授权内网地址或自身 API。没有 DIRECT、环境代理或更换 DNS 的回退。
 
 HTTPX 使用已有 0.28.1，`trust_env=False`、transport retries=0、follow_redirects=False，每跳清空临时 Cookie jar；不读取浏览器 Cookie、storage state、Bearer、应用凭据或 Referer，也不继承响应 Set-Cookie。请求 `Accept-Encoding: identity`，压缩响应直接拒绝；只流式读 `aiter_raw` 原始内容编码字节，不透明解压。只接受完整 HTTP 200，Content-Length 和实际累计字节均限 16 MiB，总 async 时限 30 秒（单连接 10 秒）。30 秒是异步网络/动作边界，不是 OS 对磁盘故障的硬中断保证。
 

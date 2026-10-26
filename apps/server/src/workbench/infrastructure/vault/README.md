@@ -92,8 +92,8 @@ are checked; the actual socket, descriptor path and cleanup remain in the
 original private vault directory. Other Unix platforms still require the full
 UDS path to be shorter than 100 encoded bytes. Readiness prints only
 `{"broker_ready":true}` after its private descriptor is published; poll client
-status for actual state. The host launcher verifies that status, all four
-component identities, API listener ownership and Worker heartbeats before
+status for actual state. The host launcher verifies that status, all five
+component identities (API, agent/file/media workers and vault broker), API listener ownership and Worker heartbeats before
 reporting successful startup.
 
 Linux/macOS use private UDS with peer UID checks; Linux clients also verify

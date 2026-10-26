@@ -22,6 +22,7 @@ class BrowserCreate(DTO):
     enabled: bool = False
     allowed_origins: list[str] = Field(default_factory=list, max_length=24)
     local_origins: list[str] = Field(default_factory=list, max_length=4)
+    allow_public_network: bool = False
     timeout_seconds: int = Field(default=20, ge=1, le=60)
     ttl_seconds: int = Field(default=900, ge=30, le=3600)
 
@@ -34,6 +35,7 @@ class BrowserSession(DTO):
     expires_at: datetime
     allowed_origins: list[str]
     local_origins: list[str]
+    allow_public_network: bool = False
     isolated_profile: Literal[True] = True
     downloads_enabled: Literal[False] = False
     explicit_download_supported: Literal[True] = True

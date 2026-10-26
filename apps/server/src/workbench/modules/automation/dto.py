@@ -10,12 +10,25 @@ from workbench.modules.browser.dto import BrowserAction
 from workbench.modules.desktop.dto import DesktopAction
 
 
+class ComputerSettingsView(PublicResponse):
+    enabled: bool
+    version: int
+
+
+class ComputerSettingsSave(Command):
+    enabled: bool = Field(strict=True)
+    expected_version: int = Field(ge=0)
+    request_id: UUID
+
+
 class AutomationConfiguration(Command):
     browser_enabled: bool = False
     browser_origins: list[str] = Field(default_factory=list, max_length=24)
     browser_local_origins: list[str] = Field(default_factory=list, max_length=4)
+    browser_public_network: bool = False
     desktop_capture: bool = False
     desktop_control: bool = False
+    desktop_all_windows: bool = False
     target_window_id: str | None = Field(default=None, min_length=1, max_length=80)
     target_window_pid: int | None = Field(default=None, ge=1)
     manual_takeover_ack: bool = False
@@ -25,8 +38,7 @@ class AutomationConfiguration(Command):
     def control_scope(self):
         if self.desktop_control and not (
             self.desktop_capture
-            and self.target_window_id
-            and self.target_window_pid
+            and (self.desktop_all_windows or self.target_window_id and self.target_window_pid)
             and self.manual_takeover_ack
         ):
             raise ValueError("桌面控制须授权捕获、精确窗口/PID与明确接管约定")

@@ -93,18 +93,20 @@ export function RunInteractions({
         scope={<ApprovalArguments approval={approval} />}
         impact="仅授权上方这一次操作。"
         review={approval.review}
-        pending={
-          available && approval.status === 'pending' && approval.review?.decision !== 'reviewing'
-        }
+        subject={typeof approval.arguments.path === 'string' ? approval.arguments.path : undefined}
+        reviewing={available && approval.status === 'pending' && !!approval.review}
+        pending={available && approval.status === 'pending' && !approval.review}
         resolvedLabel={
           approval.status === 'pending'
-            ? approval.review?.decision === 'reviewing'
-              ? '正在审核，等待服务端结果'
-              : unavailableReason
+            ? unavailableReason
             : approval.status === 'approved'
-              ? '已允许本次操作'
+              ? approval.review?.decision === 'allow'
+                ? '已自动允许'
+                : '已允许本次操作'
               : approval.status === 'rejected'
-                ? '已拒绝'
+                ? approval.review?.decision === 'deny'
+                  ? '已自动拒绝'
+                  : '已拒绝本次操作'
                 : '已处理'
         }
         onDecide={

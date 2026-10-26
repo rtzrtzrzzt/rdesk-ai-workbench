@@ -143,11 +143,15 @@ export function ApprovalCard({
   scope,
   impact,
   pending,
+  reviewing = false,
+  subject,
   onDecide,
   resolvedLabel = '已处理',
   review,
 }: {
   resolvedLabel?: string
+  reviewing?: boolean
+  subject?: string
   review?: Record<string, unknown> | null
   title: string
   target: string
@@ -174,40 +178,48 @@ export function ApprovalCard({
     <section className="interaction-card approval-card">
       <div className="card-eyebrow">
         <ShieldCheck size={15} />
-        {review?.decision === 'reviewing' ? '正在审核操作' : pending ? '需要授权' : '操作授权记录'}
+        {reviewing
+          ? '正在自动审核'
+          : pending
+            ? '需要你确认'
+            : review
+              ? '自动审核记录'
+              : '操作授权记录'}
       </div>
-      <h3>{title}</h3>
-      <dl>
-        <dt>目标</dt>
-        <dd>{target}</dd>
-        <dt>数据范围</dt>
-        <dd>{scope}</dd>
-        <dt>预期影响</dt>
-        <dd>{impact}</dd>
-      </dl>
+      <h3>{pending ? title : reviewing ? '审核结束后将自动允许或拒绝' : resolvedLabel}</h3>
+      {subject && <p className="approval-subject">{subject}</p>}
       {review && (
         <div className="approval-review" role="status">
-          <strong>
-            {review.decision === 'allow'
-              ? '审核建议：允许'
-              : review.decision === 'deny'
-                ? '审核建议：拒绝'
-                : review.decision === 'reviewing'
-                  ? '正在审核'
-                  : '需要你确认'}
-          </strong>
-          {typeof review.reason === 'string' && <p>{review.reason}</p>}
+          {reviewing && review.decision === 'human' ? (
+            <p>旧操作正在重新进入自动审核，无需手动批准。</p>
+          ) : typeof review.reason === 'string' ? (
+            <p>{review.reason}</p>
+          ) : null}
           <small>
             {review.source === 'local_model'
               ? '本机模型审核'
               : review.source === 'policy'
                 ? '安全策略'
                 : review.source === 'fallback'
-                  ? '自动审核已回退，等待人工确认'
+                  ? review.decision === 'deny'
+                    ? '审核未通过，未授权执行'
+                    : '此前自动审核未完成'
                   : '操作审核'}
           </small>
         </div>
       )}
+      <details className="approval-operation-details">
+        <summary>查看操作详情</summary>
+        {!pending && <p className="page-note">操作请求：{title}</p>}
+        <dl>
+          <dt>目标</dt>
+          <dd>{target}</dd>
+          <dt>数据范围</dt>
+          <dd>{scope}</dd>
+          <dt>预期影响</dt>
+          <dd>{impact}</dd>
+        </dl>
+      </details>
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -222,9 +234,7 @@ export function ApprovalCard({
             {busy ? '正在提交…' : '允许本次操作'}
           </Button>
         </div>
-      ) : (
-        <Status>{resolvedLabel}</Status>
-      )}
+      ) : null}
     </section>
   )
 }

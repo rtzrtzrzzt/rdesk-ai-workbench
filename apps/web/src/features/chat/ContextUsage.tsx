@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { contextApi } from '../../api/context'
 import { Button } from '../../components/ui'
@@ -12,23 +12,37 @@ const sources = {
   unavailable: '未知',
 }
 
+export type ContextUsageActions = { compact: () => void; show: () => void }
+
 export function ContextUsage({
   threadId,
   modelId,
   contextWindow,
   active,
   disabledReason,
+  actionsRef,
 }: {
   threadId?: string
   modelId?: string
   contextWindow?: number
   active: boolean
   disabledReason?: string
+  actionsRef?: Ref<ContextUsageActions>
 }) {
   const client = useQueryClient()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const command = useRef<string | null>(null)
+  const panel = useRef<HTMLDetailsElement>(null)
+  useEffect(() => {
+    function closeOutside(event: PointerEvent) {
+      if (panel.current?.open && !panel.current.contains(event.target as Node)) {
+        panel.current.open = false
+      }
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    return () => document.removeEventListener('pointerdown', closeOutside)
+  }, [])
   const key = ['thread-context', threadId, modelId]
   const context = useQuery({
     queryKey: key,
@@ -43,12 +57,26 @@ export function ContextUsage({
       ? Math.min(100, Math.round((view.used_tokens / capacity) * 100))
       : null
   async function compact() {
-    if (!threadId || busy || view?.compaction_pending) return
+    if (panel.current) panel.current.open = true
+    if (busy || view?.compaction_pending) return
+    const blocked =
+      disabledReason ??
+      (!threadId
+        ? '发送第一条消息后可压缩当前对话。'
+        : context.isPending
+          ? '正在读取上下文，请稍后重试。'
+          : context.isError
+            ? '上下文读取失败，请先重新读取。'
+            : undefined)
+    if (blocked) {
+      setError(blocked)
+      return
+    }
     command.current ??= crypto.randomUUID()
     setBusy(true)
     setError('')
     try {
-      const result = await contextApi.compact(threadId, command.current, modelId)
+      const result = await contextApi.compact(threadId!, command.current, modelId)
       client.setQueryData(key, result)
       command.current = null
     } catch (err) {
@@ -57,18 +85,60 @@ export function ContextUsage({
       setBusy(false)
     }
   }
+  useImperativeHandle(actionsRef, () => ({
+    compact: () => void compact(),
+    show: () => {
+      if (panel.current) panel.current.open = true
+    },
+  }))
   return (
-    <details className="context-usage">
-      <summary aria-label="查看上下文占用">
-        <span>上下文 {percentage === null ? '未知' : `${percentage}%`}</span>
-        {percentage !== null && (
-          <progress aria-label="上下文占用比例" max={100} value={percentage} />
-        )}
-        {view?.compaction_pending && (
-          <span> · {view.compaction_status === 'running' ? '正在压缩' : '等待压缩'}</span>
-        )}
+    <details
+      ref={panel}
+      className="context-usage"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && panel.current?.open) {
+          event.preventDefault()
+          event.stopPropagation()
+          panel.current.open = false
+          panel.current.querySelector('summary')?.focus()
+        }
+      }}
+    >
+      <summary
+        aria-label="查看上下文占用"
+        title={`上下文已用 ${percentage === null ? '未知' : `${percentage}%`}${view?.compaction_pending ? ' · 正在安排压缩' : ''}`}
+      >
+        <span
+          className={`context-ring${percentage !== null && percentage >= 90 ? ' context-ring-warning' : ''}${view?.compaction_pending ? ' context-ring-pending' : ''}`}
+          role="meter"
+          aria-label="上下文占用比例"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percentage ?? undefined}
+          aria-valuetext={percentage === null ? '暂未取得计数' : `${percentage}%`}
+        >
+          <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+            <circle className="context-ring-track" cx="14" cy="14" r="10" />
+            <circle
+              className="context-ring-fill"
+              cx="14"
+              cy="14"
+              r="10"
+              pathLength={100}
+              strokeDasharray={`${percentage ?? 0} 100`}
+              transform="rotate(-90 14 14)"
+            />
+          </svg>
+          {percentage === null && <span className="context-ring-unknown">?</span>}
+        </span>
       </summary>
       <div className="context-usage-details">
+        <h3>上下文 {percentage === null ? '未知' : `${percentage}%`}</h3>
+        {view?.compaction_pending && (
+          <p role="status">
+            {view.compaction_status === 'running' ? '正在压缩…' : '将在任务安全边界压缩。'}
+          </p>
+        )}
         <dl>
           <dt>已用 tokens</dt>
           <dd>{tokens(view?.used_tokens)}</dd>

@@ -8,6 +8,7 @@ export const runLabels: Record<string, string> = {
   waiting_approval: '等待授权',
   waiting_resource: '等待模型或其他资源',
   waiting_children: '等待子任务',
+  waiting_messages: '等待协作回复',
   created: '等待执行',
   superseded: '已由后续尝试接替',
   cancelling: '正在停止',
@@ -24,6 +25,7 @@ export const acceptsInput = (status: string) =>
   !runTerminal.has(status) && status !== 'held' && status !== 'paused' && status !== 'cancelling'
 
 export function runStatusLabel(run: { status: string; activity?: string | null }) {
+  if (run.activity === 'cleanup_unconfirmed') return '执行已中止，资源待核对'
   return run.status === 'running'
     ? run.activity === 'tool'
       ? '正在使用工具'

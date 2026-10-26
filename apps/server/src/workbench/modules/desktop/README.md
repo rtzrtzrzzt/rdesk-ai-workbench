@@ -4,6 +4,8 @@
 
 ## 已实现范围与依赖
 
+2026-10-19产品授权增量：工作台使用默认开启的用户级电脑总开关，host可在明确授权下传入`DesktopGrant.all_windows=true`。此时捕获/坐标范围为显示器并集，可在重新观察后操作不同窗口；前台身份、截图代数、几何、锁屏和持久单写租约继续校验。开关关闭会即时撤权并关闭旧会话。原生库默认grant仍不授权任何操作，实际AI动作继续走独立本地审核；驱动能力不会由开关变成已实现。
+
 Linux真实环境为DGX Spark aarch64、内核7.0.0-1019-nvidia、GNOME X11、DISPLAY=:1，X.Org21.1.11。已检测到libX11/libXtst、XTEST扩展及Pillow XCB；xrandr显示一个USB-C-1、1920×1200显示器，GNOME GetActive实际false。不是仅根据DISPLAY推定可控。
 
 Linux驱动使用受限ctypes X11/XTEST绑定和Pillow XCB；没有下载新的鼠标键盘包、第二套桌面Agent框架或虚拟显示器。只读系统命令是固定参数的xrandr与GNOME DBus锁屏查询，不接收调用者shell文本。没有任意脚本、JS、选择器、剪贴板、文件传输、摄像头或音频接口。
@@ -24,13 +26,13 @@ Windows实现User32前台窗口/PID/几何、交互desktop可访问性、物理�
 
 `DesktopClient(data_dir)` 复用私有原生传输：Linux/macOS 使用 UDS，Windows 使用带高熵 token 的私有回环端口；Linux已实测，其他平台等待设备验证。当前没有远端节点配对服务，详见[传输说明](../automation/transport_README.md)。所有平台可使用 `DesktopClient(service=trusted_service)` 原生本地接口；这不意味着远端电脑已配对。客户端不带工作台cookie、不自动重试，动作传输中断为结果不明。调用取消会请求停止该会话。主后端/Agent工具应共用此入口，而非直接暴露native.perform。
 
-`DesktopOwner`：user_id、workspace_id、run_id(nullable)，可信注入UUID，每次严格匹配。`DesktopGrant`：grant_id、capture=false、control=false、target_window_id(nullable)、target_window_pid(nullable)、expires_at。`DesktopCreate`：request_id、mode=observe|control(默认observe)、target_window_id、ttl_seconds(10..900，默认300)、manual_takeover_ack=false。同request同payload返回同会话，不创建第二个控制器；异payload409。默认没有观察授权，更没有控制升级。
+`DesktopOwner`：user_id、workspace_id、run_id(nullable)，可信注入UUID，每次严格匹配。`DesktopGrant`：grant_id、capture=false、control=false、all_windows=false、target_window_id(nullable)、target_window_pid(nullable)、expires_at。`DesktopCreate`：request_id、mode=observe|control(默认observe)、target_window_id、ttl_seconds(10..900，默认300)、manual_takeover_ack=false。同request同payload返回同会话，不创建第二个控制器；异payload409。底层默认没有观察授权，更没有控制升级。
 
-control模式必须主进程allow_control=true、grant.control=true、精确当前前台window_id+PID、已知未锁屏、驱动输入实现、manual_takeover_ack=true，以及主入口提供同步 `assert_lease(owner,session_view,lease)->None` 验证器。该回调在本机工作线程每个输入原语前执行，主调用方必须核验真实持久租约owner/run/node/epoch/期限及最新授权，失败抛安全AppError。不能用一个恒真回调冒充持久租约。CLI没有打开控制的参数。
+control模式必须主进程allow_control=true、grant.control=true、已知未锁屏、驱动输入实现、manual_takeover_ack=true，以及主入口提供同步 `assert_lease(owner,session_view,lease)->None` 验证器。固定窗口grant还必须匹配精确当前前台window_id+PID；全窗口grant允许重新观察另一个前台窗口，动作仍绑定该次真实窗口/PID。该回调在本机工作线程每个输入原语前执行，主调用方必须核验真实持久租约owner/run/node/epoch/期限及最新授权，失败抛安全AppError。不能用一个恒真回调冒充持久租约。CLI没有打开控制的参数。
 
 `DesktopLease`：lease_id、grant_id、epoch>=1、expires_at，必须由持久租约服务生成。模块仅进行本机期限/grant绑定检查并调用验证器，不另造DB租约、批准或恢复账本。同实例最多一个control会话、4个活动会话、128条会话历史；该本机限制不能阻止其他应用操作桌面，跨进程/节点单写由主持久租约保障。
 
-`DesktopObservation`：node_id/session_id/observation_id、generation、geometry_id、captured_at、displays、window_id/window_pid、bounds、screenshot_path、content_hash/byte_size、image_width/height、logical_width/height、pixel_ratio_x/y、transform=identity_crop_offset、accessibility_tree_available=false、locked(nullable)。截图是实际当前可见前台窗口区域（macOS只读当前显示器集合），不是伪造无障碍树。X11在root像素坐标内裁剪，所以实测比例1.0；Windows使用物理像素DPI上下文；macOS保留真实输出比例，不能猜Retina倍率。
+`DesktopObservation`：node_id/session_id/observation_id、generation、geometry_id、captured_at、displays、window_id/window_pid、bounds、screenshot_path、content_hash/byte_size、image_width/height、logical_width/height、pixel_ratio_x/y、transform=identity_crop_offset、accessibility_tree_available=false、locked(nullable)。固定窗口grant捕获实际前台窗口区域，全窗口grant捕获显示器并集，保留前台身份作为动作栅栏；不是无障碍树。X11在root像素坐标内裁剪，所以实测比例1.0；Windows使用物理像素DPI上下文；macOS保留真实输出比例，不能猜Retina倍率。
 
 geometry_id基于原生显示器、窗口/PID、窗口矩形与会话身份；几何或前台变化会递增generation并拒绝旧动作。坐标是原始截图像素，输入前换算到此次窗口/屏幕坐标，截图显示缩放不改变动作坐标。没有裁剪旋转/猜测映射接口。屏幕内容可以在同一几何内自行更新，当前没有可靠内容/无障碍树变化监听；不能宣称捕获后画面绝不会变化。每次动作后都必须重新observe。
 

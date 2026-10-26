@@ -31,6 +31,8 @@ def thread_view(row: Thread, db=None) -> dict:
         "id": row.id,
         "workspace_id": row.workspace_id,
         "title": row.title,
+        "title_source": row.title_source,
+        "title_naming": row.title_naming,
         "parent_thread_id": row.parent_thread_id,
         "fork_message_id": row.fork_message_id,
         "created_at": row.created_at,
@@ -104,9 +106,17 @@ def list_threads(db: Session, user_id: str, workspace_id: str) -> list[dict]:
     ]
 
 
-def create_thread(db: Session, user_id: str, workspace_id: str, title: str) -> dict:
+def create_thread(
+    db: Session, user_id: str, workspace_id: str, title: str, *, explicit_title: bool = True
+) -> dict:
     workspace_service.get(db, user_id, workspace_id)
-    row = Thread(user_id=user_id, workspace_id=workspace_id, title=title)
+    row = Thread(
+        user_id=user_id,
+        workspace_id=workspace_id,
+        title=title,
+        title_source="explicit" if explicit_title else "automatic",
+        title_naming={} if explicit_title else {"state": "awaiting_input"},
+    )
     db.add(row)
     db.flush()
     return thread_view(row, db)
@@ -186,6 +196,7 @@ def fork_thread(db: Session, user_id: str, thread_id: str, command) -> dict:
             user_id=user_id,
             workspace_id=source.workspace_id,
             title=command.title or (source.title[:194] + " · 分支"),
+            title_source="explicit" if command.title else "branch",
             parent_thread_id=source.id,
             fork_message_id=anchor.id,
         )

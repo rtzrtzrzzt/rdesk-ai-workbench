@@ -52,7 +52,6 @@ export function ActionForm({
   const [x, setX] = useState(''),
     [y, setY] = useState(''),
     [delta, setDelta] = useState('')
-  const [confirmed, setConfirmed] = useState(false)
   const [error, setError] = useState('')
   const elements = Array.isArray(observation?.elements)
     ? observation.elements
@@ -64,8 +63,7 @@ export function ActionForm({
   async function send() {
     setError('')
     try {
-      if (disabled || !confirmed || !observationId)
-        throw new Error('需要一次真实观察，并明确确认本次动作。')
+      if (disabled || !observationId) throw new Error('需要先读取当前画面或网页，才能执行动作。')
       const base = {
         request_id: crypto.randomUUID(),
         session_id: session.id,
@@ -151,7 +149,6 @@ export function ActionForm({
         }
         command = { kind: 'desktop', action }
       }
-      setConfirmed(false)
       await onSubmit(command)
     } catch (error) {
       setError(errorText(error))
@@ -164,11 +161,7 @@ export function ActionForm({
         绑定观察 {observationId ?? '尚无'}
         。执行不代表网页或应用业务结果已成功；桌面动作后必须重新观察。
       </p>
-      <fieldset
-        disabled={disabled || !observationId}
-        className="automation-fields"
-        onChange={() => setConfirmed(false)}
-      >
+      <fieldset disabled={disabled || !observationId} className="automation-fields">
         <label htmlFor={`${id}-kind`}>
           动作
           <select
@@ -296,21 +289,8 @@ export function ActionForm({
           </label>
         )}
       </fieldset>
-      <label className="automation-check">
-        <input
-          type="checkbox"
-          disabled={disabled || !observationId}
-          checked={confirmed}
-          onChange={(e) => setConfirmed(e.target.checked)}
-        />
-        我确认以上目标、观察与本次动作；提交后不会自动重发
-      </label>
-      <Button
-        variant="primary"
-        disabled={disabled || !observationId || !confirmed}
-        onClick={() => void send()}
-      >
-        确认并提交一次动作
+      <Button variant="primary" disabled={disabled || !observationId} onClick={() => void send()}>
+        执行动作
       </Button>
       {error && (
         <p role="alert" className="form-error">

@@ -16,7 +16,7 @@
 - [Anthropic API errors](https://platform.claude.com/docs/en/api/errors)：区分鉴权、权限、额度、速率及服务暂不可用；流中也可能收到 error；thinking/签名内容须原样回传。
 - [SGLang Chat 模板参数](https://docs.sglang.io/docs/basic_usage/openai_api_completions)与 [vLLM reasoning outputs](https://docs.vllm.ai/en/stable/features/reasoning_outputs/)：`chat_template_kwargs` 的键和实际效果取决于模型模板，推理解析器不能代替启用思考。工作台仅映射已确认的 Qwen3 家族参数，不把引擎支持模板参数等同于任意模型支持相同开关。
 - [SGLang 0.5.21 tokenize 实现](https://github.com/sgl-project/sglang/blob/v0.5.21/python/sglang/srt/entrypoints/openai/serving_tokenize.py)与 [请求/响应结构](https://github.com/sgl-project/sglang/blob/v0.5.21/python/sglang/srt/entrypoints/openai/protocol.py)：消息计数使用 Chat 的 `_process_messages` 渲染路径，接口返回 `tokens/count/max_model_len`；依据同时与本机已安装 0.5.21 源码核对。此扩展不是通用 OpenAI API。
-- [NVIDIA Qwen3.8-Flash-Next 模板](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4/blob/main/chat_template.jinja)：本机固定模型模板接受 `low/medium/xhigh`，其他强度会触发模板异常；工作台在保存和请求阶段提前拒绝 `high`，不改写为其他等级。
+- [NVIDIA Qwen3.8-Flash-Next 模板](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4/blob/main/chat_template.jinja)：本机固定模型模板原生接受 `low/medium/xhigh`，其他强度会触发模板异常；原生自动适配在保存和请求阶段提前拒绝 `high`，不改写为其他原生等级。工作台/自定义预设的指令档位另见下节，不能与此原生参数集合混同。
 
 ## 调用方约定
 
@@ -51,7 +51,11 @@
 
 `Generation.engine_kind` 独立于 `provider_type`，可为 `auto/sglang/vllm/llama_cpp/tensorrt_llm/other`。默认 `auto` 仅在 loopback 地址与本机部署清单的地址及模型标识匹配时识别引擎；旧配置在本机显式选择 `cache_observation=sglang` 可作为兼容提示，远程地址不据此推断。明确选择引擎不更换端点或进程，也不证明该部署的模型能力。
 
-`thinking_mode=default`、`reasoning_effort=null` 保留服务模板默认行为，旧冻结配置缺字段时也使用这些默认值。非默认思考开关仅适配 SGLang/vLLM 的 Chat 协议与已确认的 Qwen3 家族模板，排除固定思考变体；使用 `chat_template_kwargs.enable_thinking`。强度仅为 Qwen3.8 映射，同步设置模板内与顶层 `reasoning_effort`，实际允许 `low/medium/xhigh`。关闭思考与非空强度冲突时明确拒绝。Responses、Anthropic、llama.cpp、TensorRT-LLM、未知模型和其他未确认组合的非默认选项明确报错，不能静默忽略；这些配置的默认模式仍沿用原协议适配。
+原生预设使用`thinking_mode=default`、`reasoning_effort=null`时保留服务模板默认行为，旧冻结配置缺字段也使用这些默认值。`reasoning_adapter=auto`只映射SGLang/vLLM Chat协议与已确认Qwen3家族模板的非默认开关，排除固定思考变体；使用`chat_template_kwargs.enable_thinking`。Qwen3.8强度同步设置模板内与顶层`reasoning_effort`，实际允许`low/medium/xhigh`。关闭思考与非空强度冲突时明确拒绝；其他未确认组合的非默认自动映射报错，不静默忽略。
+
+当前实现另提供显式`openai_effort`和`anthropic_adaptive`原生适配。它们要求协议匹配并使用连接中声明的`native_reasoning_efforts`，不会因服务名自动获得能力：前者对Chat发送`reasoning_effort`、对Responses发送`reasoning.effort`；后者使用`thinking`与`output_config.effort`。OpenAI式关闭思考必须明确声明`none`，Anthropic式关闭使用`thinking.type=disabled`。这些是实现合同，缺真实外部提供方的验收边界保持不变。
+
+2026-10-19增加的`prompt_template`支持原生、工作台五档（低/中/高/极高/Max）及自定义通用/分档行为指令。工作台与自定义预设改变的是受控提示词，不执行任意Jinja模板，也不将五档当作所有模型的原生请求参数。已确认Qwen3.8自动适配在非原生预设下以原生medium作为中性基底，避免原模板默认xhigh抵消指令。任务/子任务选择会按连接实际选项验证并冻结，主模型与独立审核的配置分开处理；接口、预览/保存及说明入口见[AI配置说明](../../../../../../docs/technical/ai-configuration.md)和[AI操作手册](../../../../../../docs/ai-guide.md)。
 
 SGLang 的请求 `rid` 和 loopback `/abort_request` 定向取消按引擎识别，与 `cache_observation` 解耦；仅选择当前请求 ID，固定 `abort_all=false`。其他引擎未接入专用取消扩展，采用关闭 HTTP 流的边界，不能据此声称服务端立即停止推理。
 

@@ -394,20 +394,72 @@ def prepare_database():
     )
 
 
-def run_backend(command, no_browser):
+def apply_launcher_profile(selected=None):
     python = runtime_python()
-    if not python.is_file() or (command == "start" and not (WEB / "dist" / "index.html").is_file()):
+    if not python.is_file():
+        return selected
+    program = (
+        "import json,sys; "
+        f"sys.path.insert(0, {str(ROOT / 'scripts/services')!r}); "
+        "from launcher_config import load_profile; "
+        "print(json.dumps(load_profile(sys.argv[1] or None)))"
+    )
+    result = subprocess.run(
+        [str(python), "-B", "-c", program, selected or ""],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        raise BootstrapError("无法读取已选启动配置，请检查私有配置文件和运行环境。")
+    try:
+        import json
+
+        values = json.loads(result.stdout)
+    except ValueError:
+        raise BootstrapError("启动配置读取结果无效。") from None
+    if not values:
+        return selected
+    for key, value in values.get("environment", {}).items():
+        os.environ.setdefault(key, value)
+    # Keep this selection explicit after the profile environment is applied;
+    # a child must not mistake these defaults for a different operator instance.
+    return selected or str(ROOT / ".local/launcher/profile.json")
+
+
+def run_backend(command, no_browser, *, profile=None, app_only=False):
+    python = runtime_python()
+    if not python.is_file():
         raise BootstrapError(
             "首次源码安装尚未完成；请运行 start.sh --install doctor"
             "（Windows: .\\start.ps1 --install doctor）。日常启动不会隐式重装。"
         )
     if (python_version(python) or (0,))[:2] != (3, 12):
         raise BootstrapError("项目venv不是Python3.12；请显式重新运行锁定安装。")
-    # The Launcher is the authority for database startup: it may resume an
-    # existing verified private cluster, and rejects absent/external instances.
-    arguments = [str(python), "-m", "workbench.entrypoints.cli", command]
+    # The runtime interpreter owns service composition. Do not capture a long
+    # model load behind the application's old 90-second output buffer.
+    arguments = [str(python), str(ROOT / "scripts/services/stack.py"), command]
+    if profile:
+        arguments += ["--profile", profile]
+    if app_only:
+        arguments.append("--app-only")
     if command == "start" and no_browser:
         arguments.append("--no-browser")
+    if not app_only and command in {"start", "stop", "status"}:
+        process = subprocess.Popen(arguments, cwd=ROOT)
+        try:
+            return process.wait()
+        except KeyboardInterrupt:
+            # The child receives the same terminal interrupt and owns cleanup.
+            # subprocess.run would kill it while it was closing new services.
+            print("正在等待启动器完成取消与资源清理…", flush=True)
+            while True:
+                try:
+                    return process.wait()
+                except KeyboardInterrupt:
+                    continue
+        except OSError:
+            raise BootstrapError("无法执行服务启动器，请检查项目运行环境。") from None
     if command in {"configure-database", "recover-account"}:
         # Password prompts must keep the caller's terminal. Capturing stdout would
         # hide the prompts and a fixed launcher timeout could interrupt publication.
@@ -460,6 +512,14 @@ def main(argv=None):
     )
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument(
+        "--profile",
+        help="explicit private service profile; defaults to .local/launcher/profile.json",
+    )
+    parser.add_argument(
+        "--app-only", action="store_true", help="manage only API, workers and credential broker"
+    )
+    parser.add_argument("--pause", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
         "--rebuild-web",
         action="store_true",
         help="explicit locked npm ci/build; --check only checks its prerequisites",
@@ -473,6 +533,8 @@ def main(argv=None):
     if args.check and (args.install or args.prepare_database):
         parser.error("--check cannot install or prepare a database")
     ensure_locks()
+    if args.check:
+        args.profile = apply_launcher_profile(args.profile)
     if args.check or args.install or args.rebuild_web:
         tools = toolchain(
             args.python, need_web=args.rebuild_web or not (WEB / "dist/index.html").is_file()
@@ -484,13 +546,25 @@ def main(argv=None):
         elif args.rebuild_web:
             build_web(tools)
     if args.prepare_database:
+        args.profile = apply_launcher_profile(args.profile)
         prepare_database()
-    return run_backend(args.command, args.no_browser)
+    else:
+        args.profile = apply_launcher_profile(args.profile)
+    return run_backend(args.command, args.no_browser, profile=args.profile, app_only=args.app_only)
 
 
 if __name__ == "__main__":
+    result = 2
     try:
-        raise SystemExit(main())
+        result = main()
     except BootstrapError as exc:
         print(f"Native bootstrap: {exc}", file=sys.stderr)
-        raise SystemExit(2) from None
+    except KeyboardInterrupt:
+        result = 130
+    finally:
+        if "--pause" in sys.argv and sys.stdin.isatty():
+            try:
+                input("\n按 Enter 关闭此窗口…")
+            except (EOFError, KeyboardInterrupt):
+                pass
+    raise SystemExit(result)

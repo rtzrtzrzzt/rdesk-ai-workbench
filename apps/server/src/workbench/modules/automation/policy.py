@@ -32,6 +32,7 @@ def configuration(values):
             parsed.browser_origins,
             parsed.browser_local_origins,
             set(parsed.browser_local_origins),
+            allow_public=parsed.browser_public_network,
         )
     elif parsed.browser_origins or parsed.browser_local_origins:
         # Validate saved scopes even while disabled; enabling later changes no semantics.
@@ -75,6 +76,10 @@ def assert_run(db, run_id, user_id, workspace_id):
 
 
 def assert_policy(db, row, *, transfer=False):
+    from workbench.modules.automation.settings import enabled
+
+    if not enabled(db, row.user_id):
+        raise denied("电脑操作已在设置中关闭。", "computer_control_disabled")
     policy = current(db, row.user_id, row.workspace_id)
     if policy is None or policy.id != row.policy_id or policy.version != row.policy_version:
         raise denied("电脑操作授权已改变；旧会话不会沿用新授权。")
@@ -87,8 +92,8 @@ def assert_policy(db, row, *, transfer=False):
     if row.kind == "desktop":
         if (
             not config.desktop_capture
-            or policy.grant_expires_at is None
-            or policy.grant_expires_at <= now()
+            or not config.desktop_all_windows
+            and (policy.grant_expires_at is None or policy.grant_expires_at <= now())
         ):
             raise denied("屏幕捕获授权已撤销或到期。")
         if row.mode == "control" and not config.desktop_control:

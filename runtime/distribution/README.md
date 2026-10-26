@@ -2,6 +2,8 @@
 
 本目录配套 `scripts/release/package.py` 和 `scripts/bootstrap.py`。它是包含已构建前端的**原生源码发行包**，不是签名的 Windows/macOS/Linux 二进制安装器。构建/stage 不修改数据库、用户数据、版本入口或现有服务。日常 start 不执行依赖升级或 npm 构建。
 
+当前应用版本为 **1.0.0**。已准备环境的一键启动、进度显示及 `stop.sh` / `stop.ps1` 关闭行为见[一键服务说明](one-click-services.md)。当前源码包构建规则会包含这些入口；本次只同步文档与版本并提交Git，没有构建1.0.0发行包，旧包不代表当前源码。
+
 ## 包含与排除
 
 包包含 Python 源码、迁移、pyproject/uv.lock、可重建的前端源码/package-lock、当前真实 `apps/web/dist`、必要脚本、设计/组件来源文档、项目 LICENSE/NOTICE/THIRD_PARTY_NOTICES，以及本机可读取且锁定版本匹配的 npm LICENSE/COPYING/NOTICE。前端产物是已有文件快照，不重写正在试用的 dist，也不声称证明了它与当前所有源码的构建关系。
@@ -65,8 +67,8 @@ Windows使用对应 `start.ps1` 参数。`--install` 按既有语义执行 `uv s
 
 安全更新先根据SBOM和官方组件公告识别受影响的实际组件，按明确版本/默认PyPI/npm或官方原生源更新受影响锁/许可材料，再真实重建和针对性验收，发布新目录包。模型/引擎/浏览器/原生工具的安全更新独立管理，不因日常打开Launcher浮动升级；本源码包不声称已扫描全部CVE或具有自动签名更新系统。
 
-## 本轮辅助与未覆盖
+## 历史发行机制验证与未覆盖
 
-本轮交付核对采用最终源码与已重建 dist 的 build → validate → 独立 stage → 解包后 bootstrap --help；这一流程不安装或启动副本、创建账号或迁移数据库。具体归档路径、版本和校验结果以最终构建的 `BUILD-REPORT.json`、`RELEASE-MANIFEST.json` 及暂存回执为准，不沿用中间包摘要冒充最终发行。源码包包含 sandbox 运行说明，继续排除主机专属模型配置与私有验证资料。
+2026-10-18发行机制核对曾采用当时源码与已重建 dist 的 build → validate → 独立 stage → 解包后 bootstrap --help；这一流程未安装或启动副本、创建账号或迁移数据库。该历史证据不能作为1.0.0包已构建或验证的证明。另行构建新包时，具体归档路径、版本和校验结果以该包的 `BUILD-REPORT.json`、`RELEASE-MANIFEST.json` 及暂存回执为准，不沿用旧包摘要。源码包包含 sandbox 运行说明，继续排除主机专属模型配置与私有验证资料。
 
 原生应用的实际浏览器使用与备份隔离恢复已有独立产品证据，但不等于已从最终源码包完成升级切换。Windows/macOS 安装、签名、权限、完整启动，正式证书信任与另一台 LAN 设备访问，以及真实跨版本升级/回退仍等待对应条件。当前没有完整签名二进制或整包离线安装交付。

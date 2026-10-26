@@ -33,14 +33,23 @@ class BrowserObserve(SessionTarget):
 
 
 class BrowserDownload(SessionTarget):
-    last_observation: UUID
+    last_observation: UUID = Field(
+        description="最新观察的observation_id，不是action_id或session_id"
+    )
     target_ref: str = Field(pattern=r"^e[0-9]{1,4}$")
 
 
 class BrowserStep(SessionTarget):
-    last_observation: UUID
-    target_ref: str = Field(min_length=1, max_length=64)
-    kind: Literal["navigate", "click", "type", "scroll", "key"]
+    last_observation: UUID = Field(
+        description="最新观察的observation_id，不是action_id或session_id"
+    )
+    target_ref: str = Field(
+        pattern=r"^(page|e[0-9]{1,4})$",
+        description="导航固定使用page；页面级按键/滚动用page；元素动作复制最新观察的e数字引用",
+    )
+    kind: Literal["navigate", "click", "type", "scroll", "key"] = Field(
+        description="navigate只传url；type只传text；key只传key；scroll只传delta_y；其余动作参数省略"
+    )
     url: str | None = Field(default=None, max_length=4096)
     text: str | None = Field(default=None, max_length=16000)
     key: (
@@ -50,10 +59,14 @@ class BrowserStep(SessionTarget):
 
 
 class ComputerStep(SessionTarget):
-    last_observation: UUID
+    last_observation: UUID = Field(
+        description="最新观察的observation_id，不是action_id或session_id"
+    )
     generation: int = Field(ge=1)
     geometry_id: str = Field(pattern=r"^[a-f0-9]{64}$")
-    target_window_id: str = Field(min_length=1, max_length=80)
+    target_window_id: str = Field(
+        min_length=1, max_length=80, description="同一次最新观察的window_id"
+    )
     kind: Literal["click", "type", "key", "scroll"]
     x: int | None = Field(default=None, ge=0, le=32768)
     y: int | None = Field(default=None, ge=0, le=32768)
@@ -78,6 +91,22 @@ class ComputerStep(SessionTarget):
         | None
     ) = None
     scroll_steps: int | None = Field(default=None, ge=-10, le=10)
+
+
+def action_result(result):
+    view = result.model_dump(mode="json")
+    # The owner API retains its ActionView. Model tools name the action ID
+    # explicitly and promote actual observation fields needed by the next call.
+    view["action_id"] = view.pop("id")
+    body = view.get("result") or {}
+    observation = body if result.kind == "observe" else body.get("observation")
+    if isinstance(observation, dict) and observation.get("observation_id"):
+        for key in ("observation_id", "generation", "geometry_id", "window_id"):
+            if key in observation:
+                view[key] = observation[key]
+        if observation.get("window_id"):
+            view["target_window_id"] = observation["window_id"]
+    return view
 
 
 async def execute(run_id, operation_id, name, values):
@@ -162,15 +191,16 @@ async def execute(run_id, operation_id, name, values):
             kind="browser" if name == "browser_action" else "desktop",
             run_id=run_id,
         )
-    view = result.model_dump(mode="json")
+    view = action_result(result)
     if result.status == "outcome_unknown":
         raise AppError(
             "automation_action_unknown", "原生动作结果待核对，不会重放。", 409, "outcome_unknown"
         )
     if result.status == "failed":
-        view["error"] = (result.result or {}).get("error") or {
-            "code": "native_action_failed",
-            "message": "原生预检或动作未完成。",
+        body = result.result or {}
+        view["error"] = body.get("error") or {
+            "code": body.get("error_code") or "native_action_failed",
+            "message": body.get("message") or "原生预检或动作未完成。",
         }
     return view
 

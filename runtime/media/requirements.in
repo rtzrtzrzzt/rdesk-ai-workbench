@@ -1,0 +1,15 @@
+# Isolated headless subset of BFL flux3 bfc8889a4497f846416f253a3972a1941ac698b9.
+# Does not install the upstream web UI, vLLM upsampler or extra model weights.
+# Pillow uses the maintained application line; reference uses ordinary PIL APIs.
+torch==2.11.0
+torchvision==0.26.0
+triton==3.6.0
+transformers==5.8.1
+tokenizers==0.22.2
+accelerate==1.13.0
+safetensors==0.8.0
+Pillow==13.0.0
+numpy==2.3.5
+einops==0.8.2
+flashinfer-python==0.6.8.post1
+flashinfer-cubin==0.6.8.post1

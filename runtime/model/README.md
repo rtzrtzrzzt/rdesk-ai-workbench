@@ -1,6 +1,6 @@
-# 当前 Flash-Next 的 S0 部署
+# 本机 Flash-Next 模型部署
 
-只使用本机既有 NVIDIA 权重，固定修订见 `deployment.json`。本页针对当前 Spark 项目部署；通用源码发行包刻意不携带这份主机专属配置和验证证据，使用模型辅助脚本前须另行准备匹配的本机配置/环境，不能直接把其他机器的 verified 标记当成自己的验收结果。独立虚拟环境位于 `.runtime/model-env`，权重保持原目录；PLE backing、编译缓存、日志与真实结果存放在 `.local/model`。不自动下载模型、切换模型或连接外部 API；MTP 仅由部署清单的显式布尔值开启。
+只使用本机既有 NVIDIA 权重，固定修订见 `deployment.json`。当前物理目录为 `models/nvidia/Qwen3.8-Flash-Next-NVFP4`，服务模型别名为 `Qwen3.8-Flash-Next`；上下文131072、MTP开启、模型推理并发1。本页针对当前 Spark 项目部署；通用源码发行包刻意不携带这份主机专属配置和验证证据，使用模型辅助脚本前须另行准备匹配的本机配置/环境，不能直接把其他机器的 verified 标记当成自己的验收结果。独立虚拟环境位于 `.runtime/model-env`，权重保持原目录；PLE backing、编译缓存、日志与真实结果存放在 `.local/model`。不自动下载模型、切换模型或连接外部 API；MTP 仅由部署清单的显式布尔值开启。
 
 官方 SGLang `v0.5.21` 的确切提交为 `e00930c5489053f26d86b179cee0d087f846acbb`。其 `qwen4_exp.py` 从 NVIDIA MIXED_PRECISION 配置识别 FP8 PLE；`qwen4_exp_ple_table.py` 提供 `file` backend，明确面向 GB10 UMA。主机 CUDA 13.0.3；约束将 NVCC、NVRTC、CUDA 绑定固定在 13.0，其他 NVIDIA 组件按实际依赖锁记录，不把所有组件版本统称为 13.0。安装完成后生成本环境的 `requirements.lock`，实际已安装包证据见 `.local/model/evidence/environment-packages.json`，pip安装来源报告见 `installed-packages.json`。文件存在和安装成功均不代表模型真实验收通过。
 
@@ -54,7 +54,9 @@ guard崩溃、回收超时、无法读取/匹配身份、损坏/旧不完整记�
 
 新版guard的首次实际加载复用了旧PLE backing，写入采样约15MiB/s，10/11分片时仍在慢速读写；638.296秒处主动停止。guard真实返回`linux_subreaper_echild`和`resources_closed=true`后，才通过既有清理工具移除最旧的未使用generation，再执行`serve --fresh-ple`。第二次加载从guard启动到`/ready`首次成功为575.016秒，随后真实文本请求在0.601秒内完成；模型保持ready。新文件写入阶段的一次采样约572MiB/s，不是整体推理或磁盘吞吐基准。
 
-默认`serve`仍会复用配置中的PLE目录，本轮没有将缓存轮换改成自动策略。第二次尝试改变了backing路径，而且前一次已读过部分文件，不能当成严格冷/热启动对照，也不能承诺不重启就会快很多。完整计时、各次尝试和当前服务状态以[统一状态清单](../../docs/implementation-status.md)及上述私有`startup.json`为准；新guard完整预编译、ready后的停止/再次启动和压力验证仍未据此完成。
+直接运行`serve`仍会复用配置中的PLE目录，这次2026-10-18测量没有将缓存轮换改成自动策略。第二次尝试改变了backing路径，而且前一次已读过部分文件，不能当成严格冷/热启动对照，也不能承诺不重启就会快很多。完整计时以当时私有`startup.json`为准。随后一键启动器的实际启停、用户真实重启后的旧记录核对和再次启动已另有证据；当前状态见[统一状态清单第20至22节](../../docs/implementation-status.md)。新guard完整预编译与完整压力基准仍不能由上述加载测量推导为通过。
+
+2026-10-19 的[一键启动器](../distribution/one-click-services.md)新增组合策略：已有同配置模型真实就绪时直接复用；需要新启动且模型/预编译记录均已确认关闭时，调用现有清理器保留一代PLE，再以 `serve --fresh-ple` 创建新一代。直接运行本节的 `modelctl serve` 仍保留原默认行为；归属未知时不自动清除记录或缓存。该策略避免本机已观察到的旧backing复用问题，不保证固定加载时间或推理提速。
 
 ### 旧状态与guard丢失后的显式过渡
 
@@ -98,7 +100,7 @@ python3 scripts/model/modelctl.py cleanup-ple --keep 1 --include-legacy
 
 端点验证会触发真实推理，保存请求、原始响应、实际 usage、结束原因和耗时。工具验证实际读取本部署配置，并通过白名单工具将真实修订追加到本次证据目录内的验收记录；模型无法指定宿主路径。图片验证使用已人工查看并保留的真实工作台连接页截图，检查四个可见标签，不生成测试图片。端点检查之外，工作台现已有真实补充/停止、子任务和缓存看板流程，见[统一状态清单](../../docs/implementation-status.md)；视频和完整压力基准仍待验证，未验能力保持 unknown，不能从文本成功推导。端点工具协议通过也不能代替工作台 ToolExecutor 与真实 UI 流程验收。
 
-历史8K配置下，2026-10-17 的 fresh-PLE 加载已真实成功：11 分片权重加载 529.51 秒，复用预编译的 MoE `.so`，服务于 12:18:14 UTC 进入 ready。至当时四项端点验证结束的快照，系统最低 MemAvailable 为 22,319,894,528 字节（20.79 GiB），系统总内存减 MemAvailable 的峰值为 108,341,014,528 字节（100.90 GiB）；这是整机 UMA 压力，包含 OS 和应用，不能作为模型独占分配量，也不能代替当前32K配置的测量。最新运行记录见 `state.json` 和 `resources.jsonl`。
+历史8K配置下，2026-10-17 的 fresh-PLE 加载已真实成功：11 分片权重加载 529.51 秒，复用预编译的 MoE `.so`，服务于 12:18:14 UTC 进入 ready。至当时四项端点验证结束的快照，系统最低 MemAvailable 为 22,319,894,528 字节（20.79 GiB），系统总内存减 MemAvailable 的峰值为 108,341,014,528 字节（100.90 GiB）；这是整机 UMA 压力，包含 OS 和应用，不能作为模型独占分配量，也不能代替当前131072/MTP配置的测量。最新运行记录见 `state.json` 和 `resources.jsonl`。
 
 上述历史8K配置的真实文本、SSE、工具读写闭环、截图阅读均已通过，证据索引为 `.local/model/evidence/s0-summary.json`，`deployment.json` 将支持状态和证据状态分别记录，并保留检查时间、修订和原始结果路径。SSE 首内容 0.131 秒，完整收到 usage 和 `[DONE]`；工具实际读取部署后写入固定修订；截图正确识别四个可见标签，响应报告 1395 image_tokens。这些是当时的小样本协议验证，不是通用吞吐基准。TileLang 在 QSA 首次编译时报告静态 `Data race` warning，完整保留在成功启动的 `server.log`，未被禁用或掩盖；它未阻止 ready 和上述真实检查，不能仅据此宣称所有上下文下数值正确。
 
