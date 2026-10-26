@@ -1,4 +1,14 @@
 /models/
+# Model weights stay outside the source repository, even if copied elsewhere.
+*.safetensors
+*.gguf
+*.ggml
+*.onnx
+*.onnx_data
+*.ckpt
+*.pt
+*.pth
+*.bin
 .venv/
 .runtime/
 .tools/

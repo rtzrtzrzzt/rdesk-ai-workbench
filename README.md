@@ -1,121 +1,156 @@
-# AI 工作台 1.0.0
+# RDesk
 
-一个在本机运行的 Web 工作台，用于连接模型、管理工作区文件和对话，并通过可查看、可批准、可停止的任务完成工作。后台保存任务、问题、批准、日志和文件来源，关闭网页后仍可回来核对进度。
+**English** · [简体中文](README.zh-CN.md)
 
-**1.0.0 已于 2026-10-26 完成。** 本版包括持久任务、双向多轮 Agent 协作、文件与长期记忆、插件/Skill、生成、用户控制的跨对话读取及 AI 配置接口。当前能力和真实验收范围见[实现状态](docs/implementation-status.md)，AI 使用入口见[操作说明书](docs/ai-guide.md)。
+**An AI-friendly, local-first AI agent workbench.** Connect models, work with files, write code, automate a browser and generate images in one self-hosted web interface. Agents can discover tools, read their operating guide and inspect or configure workbench settings.
 
-采用 React/TypeScript、FastAPI、PostgreSQL 和 LangGraph。Linux、Windows、macOS 均有原生部署设计，不要求 Docker；**当前实际运行与界面验证以 Ubuntu24.04 ARM64 的 NVIDIA DGX Spark 为主**。Windows/macOS 等待真实设备验证，不能据此视为三平台发行已完成。当前交付是源码和原生源码发行工具，尚非完整签名二进制安装器。
+RDesk brings together chat, durable tasks, multi-agent collaboration, MCP tools and resources, persistent Markdown memory, browser automation and image generation. Tasks retain their state, tool results and file provenance so you can inspect, steer, stop and resume work.
 
-1.0.0 采用**仅本机回环访问、无需应用登录密码**。首次打开自动连接本机所有者，保留随机会话与跨站写入保护；旧账号的数据归属保留。暂不接受局域网监听，未来恢复局域网访问需单独实现认证。模型 API 凭据的保险库仍独立解锁。
+**1.0.0 · Apache-2.0 · Authors: 任天卓 (Ren Tianzhuo) & Codex**
 
-默认智能审批由当前本地模型的独立审核请求自动允许或拒绝需授权的操作，包括文件写入和执行命令；不确定、审核失败或本地审核不可用时自动拒绝并说明原因，不转人工。手动审批仅在用户主动选择该模式时使用，已有工作区、文件版本、网络和凭据权限边界继续生效。
+[Quick start](#first-time-setup) · [Capabilities and limitations](#capabilities-and-limitations) · [AI operating guide](docs/ai-guide.md) · [Documentation](docs/README.md) · [Authors](#authors)
 
-任务输出时可继续输入：在「设置 → 通用」选择排入队列或引导当前任务，聊天框不显示模式切换；排队消息可直接点击「立即引导」。生成中收到引导会尽快保留部分输出并按新要求重新生成，已开始的工具先执行到安全边界。停止与发送分别操作。失败或停止会暂停并保留队列，正常完成且资源清理后才自动发送下一条。对话支持重命名、归档恢复、编辑用户消息建立新分支，以及预览范围后永久删除全部后代。
+## Features
 
-聊天按实际顺序显示进度说明和可展开的工具状态，工具内容生成期间即可看到「正在准备内容」，实际操作显示执行中和完成状态；模型提供可读思考时可点击查看，参数和调试信息默认收起。子任务从主对话内打开，不占普通对话侧栏。运行诊断集中在后台任务页。发送按钮左侧圆环显示上下文占用，点开可看详情和压缩；输入 `/` 可浏览快捷命令，支持 `/压缩`、`/上下文`、`/新对话`、`/设置`、`/模型`、`/帮助` 及对应英文别名。压缩保留原消息，以摘要继续后续任务。输出上限可留空，按总上下文剩余空间自动分配；子任务继承预算与允许的只读工具，模型推理并发仍为 1。审核思考可在任务设置独立调整，旧任务保留冻结值；当前本机用户已选择关闭审核思考，没有已确认强度适配的模型沿用连接参数。
-
-附件可通过回形针多选、拖入或粘贴直接上传，不限制文件扩展名，单文件最多 1 GB、每条消息最多 8 个。图片预览和支持格式的内容会自动准备；暂不能解析的格式可作为原文件附上，并明确说明内容尚未读入。原文件保留，可从消息中下载；复杂处理仍可在文件页设置。当前每条消息自动准备前两张图像，向远程模型发送附件时统一确认本次传输。
-
-「设置 → 插件与 Skill」可检查并安装本机目录、ZIP 或 Git 来源的扩展，按全局或工作区启停；任务冻结安装版本，停用实时撤回后续使用。已登记规则及 Skill 通过专用只读工具读取，无需为读取全局 AGENTS.md 放开任意主机目录。「模型与连接」可选择模型原生、工作台五档或自定义行为预设；五档使用指令引导，底层工具、图像格式仍保留模型原生协议，不能当作所有模型都有原生 Max 参数。
-
-侧栏「生成」可直接使用已接入的图像、视频、音频和 3D 模型，也能作为主模型的统一生成工具。当前 Spark 已完成本地 FLUX 3 Image Klein NVFP4 的真实生图及参考图编辑；其他类型需用户接入符合适配合同的服务，未接入时显示“没有模型接入”。生成产物进入同一文件库，可预览、下载及由本地视觉模型重新查看。生成记录支持多选、全选和批量删除；活动任务先停止并确认资源回收，删除记录保留文件库产物及已有引用。接入边界见[扩展与生成架构](docs/technical/extensions-and-generation.md)，本地环境见[生图运行说明](runtime/media/README.md)。
-
-## 运行前准备
-
-| 条件 | 用途 |
+| Capability | What it provides |
 | --- | --- |
-| Python3.12、uv≥0.9.25 | 按 `uv.lock` 安装项目运行环境；启动器不会自动下载 Python |
-| PostgreSQL16 | 保存账号、任务和恢复状态；使用独立应用库与最小权限角色 |
-| Node≥22.12、npm≥9.5 | 仅在缺少已构建前端或显式重建时需要；随包已有 `apps/web/dist` 时日常安装/启动不要求 Node |
-| 可用的模型连接 | 本地推理服务或用户明确配置的外部 API；源码包不包含主模型权重或推理环境 |
+| AI-friendly configuration | Discover tools by purpose; read configuration contracts; preview changes, save settings and verify receipts; read the built-in operating guide in sections |
+| Multi-agent collaboration | Bidirectional parent/child messages, multiple rounds, follow-up instructions, interruption and closure; waiting releases inference capacity |
+| Durable workflows | Streaming chat, file operations, long-running commands, plans, steering and cancellation, with records available after a refresh |
+| Files and memory | Uploads, extraction, previews, versioned artifacts and persistent Markdown memory; permission-scoped search and reading of other conversations |
+| Tools and extensions | MCP tools and resources, plugins/Skills, code intelligence, Notebook editing and managed browser automation |
+| Generation | A dedicated generation page and agent tools share tasks and files; local FLUX image generation and reference editing have been tested on real hardware |
 
-依赖安装使用默认 PyPI/npm 源及现有锁文件。浏览器、Office、媒体、搜索和 ASR 等组件按需配置，不因打开工作台自动下载大模型或安装系统服务。
+> **This repository contains source code, documentation and dependency configuration. It does not contain model weights, inference environments, user files, conversations, databases or credentials.** Prepare models and optional components separately; see the [model runtime guide](runtime/model/README.md) and [image generation guide](runtime/media/README.md).
 
-## 首次设置
+Version **1.0.0 was completed on October 26, 2026**. See the [implementation and acceptance record](docs/implementation-status.md) for the exact scope and remaining limitations. Detailed project documentation and the AI operating guide are currently in Chinese.
 
-日常偏好可直接在「设置」各分类编辑，配置内容默认展开；「全局规则」提供AGENTS.md编辑与版本检查。「通用」中的电脑操作总开关默认开启，AI操作仍接受智能审核。主任务可在输入框选择关闭思考，审核思考独立配置；对话末尾显示本轮实时耗时和结束后的固定时长。当前本机验证情况及驱动限制见[实现状态](docs/implementation-status.md)。
+## How it works
 
-在项目或已解包的版本目录运行：
+RDesk uses React/TypeScript, FastAPI, PostgreSQL and LangGraph. Native deployment paths are provided for Linux, Windows and macOS without requiring Docker. **Actual runtime and browser acceptance has primarily been performed on Ubuntu 24.04 ARM64 on NVIDIA DGX Spark.** Windows and macOS still require real-device validation. The deliverable is source code and native source-release tooling, rather than a complete signed binary installer.
+
+Version 1.0.0 listens on loopback only and does not require an application login password. Opening the local page establishes an owner session; random sessions and cross-site write protection remain in place, as does ownership of existing data. LAN listening is disabled. The credential vault has its own unlock process.
+
+By default, a separate request to the configured local model reviews operations that require authorization, including file writes and command execution. Uncertain decisions, review failures and an unavailable local reviewer result in denial with a reason. Manual approval is used only when explicitly selected by the user. Workspace, file-version, network and credential boundaries still apply.
+
+While a task runs, new messages can be queued or used to steer it, according to **Settings → General**. Queued messages can be promoted to immediate steering. In-progress tools reach a safe boundary before new instructions take effect. Stopping is a separate action. Failure or cancellation pauses and preserves the queue; automatic dispatch resumes only after successful completion and resource cleanup. Conversations support renaming, archiving, branching from edited user messages and deletion after a scope preview.
+
+Chat displays progress and expandable tool calls in execution order, including preparation and running states. Readable reasoning is shown when the model supplies it; parameters and debugging details are collapsed by default. Child tasks open within the parent conversation, while diagnostics live on the background-tasks page. A context indicator provides usage and compaction controls. Type `/` for shortcuts, including `/compact`, `/context`, `/new`, `/settings`, `/model` and `/help`, with Chinese aliases. Compaction retains original messages. An empty output limit allocates space from the remaining context. Children inherit budgets and permitted read tools; model inference concurrency remains **one**.
+
+Upload attachments by selection, drag-and-drop or paste: up to **1 GB per file and eight files per message**, without an extension allowlist. Supported previews and content preparation run automatically; unsupported formats retain the original file and clearly report that their content was not read. The first two images in a message are prepared automatically. Sending attachments to a remote model requires transfer confirmation.
+
+Install plugins and Skills from a local directory, ZIP or Git source in **Settings → Plugins and Skills**. Tasks freeze the installed version; disabling an extension revokes subsequent use. Dedicated read tools expose registered rules and Skills. Model settings offer native behavior, five workbench instruction presets or custom instructions; these presets do not imply every model supports a native “Max” parameter.
+
+The **Generate** page supports configured image, video, audio and 3D adapters. Local FLUX 3 Image Klein NVFP4 generation and reference editing have been tested on Spark. Other modalities require a compatible provider; unavailable ones are identified in the interface. Outputs enter the shared file library. Batch deletion stops active tasks and checks resource closure first; deleting records preserves output files and existing references. See [generation architecture](docs/technical/extensions-and-generation.md).
+
+## Prerequisites
+
+| Requirement | Purpose |
+| --- | --- |
+| Python 3.12 and uv ≥ 0.9.25 | Install the locked Python environment; the launcher does not download Python automatically |
+| PostgreSQL 16 | Store tasks and recovery state in a dedicated application database with a limited-privilege role |
+| Node ≥ 22.12 and npm ≥ 9.5 | Needed to build a missing frontend or explicitly rebuild it; unnecessary for daily startup when a release already includes `apps/web/dist` |
+| A configured model endpoint | A separately prepared local inference service or an explicitly configured external API; model weights and inference environments are not bundled |
+
+Dependency installation uses the default PyPI/npm registries and existing lockfiles. Browser, Office, media, search and ASR components are optional; opening RDesk does not silently download large models or install system services.
+
+## First-time setup
+
+Clone this repository and enter its directory. From the project or an extracted source release, run:
 
 ```sh
 ./start.sh --install doctor
 ```
 
-这会显式准备项目 Python 环境，复用随包前端；缺少前端时按 npm 锁文件构建。随后显示诊断，数据库尚未配置时可继续下面步骤。
+This explicitly prepares the Python environment, reuses a bundled frontend or builds a missing one from the npm lockfile, then prints diagnostics. Continue with database setup if it is not configured yet.
 
-数据库准备二选一：
+Choose one database route:
 
-- **Ubuntu24.04 ARM64 项目私有 PostgreSQL**：运行 `./start.sh --prepare-database doctor`。显式下载、解包和启动原生 PG16，数据及私有组件放在应用数据根，不 sudo、不改系统包、不接管其他数据库。
-- **已有原生 PostgreSQL**：先由数据库管理者准备应用专用数据库和角色，再运行 `./start.sh configure-database`。本机终端中逐项输入连接信息，口令不回显；真实只读验证后确认保存。当前仅接受回环连接，不创建或迁移库，也不覆盖已有配置。详见[交互配置说明](runtime/distribution/database-setup.md)。
+- **Project-private PostgreSQL on Ubuntu 24.04 ARM64:** run `./start.sh --prepare-database doctor`. This explicitly downloads, extracts and starts native PostgreSQL 16 under the application data root, without sudo, modifying system packages or taking over another database.
+- **An existing native PostgreSQL installation:** have its administrator prepare a dedicated database and role, then run `./start.sh configure-database`. The local terminal wizard hides the password, performs read-only validation and asks before saving. It accepts loopback connections only and does not create or migrate the database or overwrite existing configuration. See the [database setup guide](runtime/distribution/database-setup.md).
 
-然后启动整套已配置服务：
+Start the configured stack:
 
 ```sh
 ./start.sh start
 ```
 
-无参数运行 `./start.sh` 也会启动。启动器依次检查配置、恢复已有受管数据库、启动已准备的搜索、加载已配置的本地模型，再启动 API、agent Worker、file Worker、media Worker 和凭据服务。终端实时显示阶段、真实模型分片进度和耗时；服务全部就绪后打开浏览器。已有健康服务直接复用，归属不明或失败时保留断点并提示，不重复加载或自动重放未知动作。
+Running `./start.sh` without arguments also starts it. The launcher checks configuration, restores the managed database, starts prepared search and local model services, then starts the API, agent/file/media workers and credential service. It reports actual stages, model-shard progress and elapsed time before opening the browser. Healthy existing services are reused; unknown ownership or failures are reported without replaying uncertain actions.
 
-默认入口为 `http://127.0.0.1:8765`；本机 `.local/launcher/profile.json` 可保存已选择的数据、端口和前端，因此当前 Spark 沿用 `http://127.0.0.1:8766` 及原有对话。配置不包含在 Git 或发行包里。未配置受管本地模型/搜索时沿用页面中的外部连接，不隐式下载或安装这些组件。
+The default URL is **`http://127.0.0.1:8765`**. Saved local ports and frontend configuration take precedence; use the URL printed by the launcher. Private local configuration is excluded from Git and release packages. Unconfigured managed model/search components are not downloaded implicitly; use connections configured in the interface.
 
-关闭整套受管服务使用 `./stop.sh`（等同于 `./start.sh stop`）。启动完成后关闭终端，服务继续后台运行；启动中按 Ctrl+C 会清理本次新启动的组件，保留之前已在运行的服务。关闭过程逐项确认退出，保留对话、文件、配置和模型权重。详细模式及私有配置见[一键启停说明](runtime/distribution/one-click-services.md)。
+Stop the managed stack with:
 
-Windows 使用 `.\start.ps1` / `.\stop.ps1` 及相同参数；macOS 使用 `start.sh` / `stop.sh`。它们共用服务控制代码；当前 Spark 本地推理、私有 PG 和搜索配方依赖 Linux，其他平台须配置各自已准备的外部服务，否则会在启动前明确提示缺少条件。Windows/macOS 完整流程仍待真实设备验收。其他平台 PG 自动准备未开放，应采用[PostgreSQL 官方原生安装路径](https://www.postgresql.org/download/)和上述配置向导。
+```sh
+./stop.sh
+```
 
-`--install`、`--prepare-database`、`--rebuild-web` 执行后仍会运行指定命令；未指定命令时默认是 `start`。只想准备并查看状态时，请像示例一样明确使用 `doctor`。
+After startup completes, closing the terminal leaves services running. During startup, Ctrl+C cleans up components newly started by that invocation while preserving previously running services. Shutdown verifies exits and retains conversations, files, settings and weights. See [service control](runtime/distribution/one-click-services.md).
 
-## 日常命令
+Windows uses `.\start.ps1` / `.\stop.ps1` with the same arguments; macOS uses the shell scripts. The Spark model, private PostgreSQL and search recipes depend on Linux. Other platforms need separately prepared services and still await full real-device acceptance. Automatic PostgreSQL preparation is not enabled there; use [official native PostgreSQL installers](https://www.postgresql.org/download/) and the configuration wizard.
 
-| 命令 | 实际行为 |
+`--install`, `--prepare-database` and `--rebuild-web` still run the selected command afterwards; without a command the default is `start`. Specify `doctor`, as above, when you only want preparation and diagnostics.
+
+## Everyday commands
+
+| Command | Behavior |
 | --- | --- |
-| `./start.sh --check` | 只读检查工具链、前端和数据库；不安装、迁移或启动服务；条件不足时返回非零 |
-| `./start.sh status` | 显示数据库、搜索、模型及工作台组件状态；不启动服务 |
-| `./start.sh doctor` | 查询所选应用配置及受管进程身份；不安装或启动业务组件 |
-| `./start.sh` / `./start.sh start` | 启动整套已配置服务，显示真实进度；复用健康服务，不重装依赖或更新模型 |
-| `./stop.sh` / `./start.sh stop` | 按工作台、模型、搜索、数据库的顺序关闭已配置的受管服务；未知资源保留并提示 |
-| `./start.sh --app-only start` / `./start.sh --app-only stop` | 高级用法：只控制所选工作台的 API、Worker 和凭据服务 |
-| `./start.sh recover-account` | 原应用密码恢复命令已退役；本机页面自动建立新会话，凭据保险库仍需独立解锁 |
-| `./start.sh --rebuild-web doctor` | 显式按锁文件安装前端依赖并重建；需要 Node/npm |
+| `./start.sh --check` | Check toolchain, frontend and database without installing, migrating or starting services; return nonzero when requirements are missing |
+| `./start.sh status` | Show configured database, search, model and workbench service status |
+| `./start.sh doctor` | Inspect the selected application configuration and managed process identity without starting business components |
+| `./start.sh` / `./start.sh start` | Start the configured stack and reuse healthy services; do not reinstall dependencies or update models |
+| `./stop.sh` / `./start.sh stop` | Stop managed workbench, model, search and database services; retain and report unknown resources |
+| `./start.sh --app-only start` / `./start.sh --app-only stop` | Advanced: control only the selected API, workers and credential service |
+| `./start.sh recover-account` | Retired application-password recovery entry; local sessions are automatic, while vault unlocking remains separate |
+| `./start.sh --rebuild-web doctor` | Explicitly install locked frontend dependencies and rebuild; requires Node/npm |
 
-状态查询可能创建必要的私有空状态目录，不修改业务记录。应用数据使用标准 OS 独立目录，支持 `WORKBENCH_DATA_DIR` 覆盖；升级源码版本不会自动移动或清空用户数据。连接口令、API key 和保险库口令不要写进命令行、共享截图或诊断说明。
+Status queries may create private empty state directories but do not modify business records. Data uses the standard OS application-data directory, with a `WORKBENCH_DATA_DIR` override. Updating source does not move or clear user data. Keep passwords, API keys and vault secrets out of command arguments, shared screenshots and diagnostic reports.
 
-完整进度、实机流程及代码审查修复见[实现与验收状态](docs/implementation-status.md)。当前源码版本为 **1.0.0**；跨平台、可选组件及外部提供方的具体限制继续按该清单说明。
+## Capabilities and limitations
 
-## 当前功能与限制
+The implementation includes workspaces, streaming conversations, persistent questions and approvals, cancellation and recovery, multi-round parent/child communication, Markdown memory search and version restoration, original files and previews, configurable search and web reading, managed browser downloads, MCP, usage/hardware dashboards and isolated restore entry points. Availability depends on configured components and the selected model. Source support alone does not establish end-to-end acceptance.
 
-已实现工作区与会话管理、流式对话、持久提问和审批、取消与恢复、主子双向消息与多轮协作；Markdown 记忆检索、版本比较与恢复；文件原件、预览、提取和受限导出；可配置搜索与网页读取、受管浏览器操作和下载、MCP 工具；真实用量及硬件看板、账号安全、备份与隔离恢复入口。组件是否可用以实际能力状态和所选模型为准，源码存在不等于所有流程都已验收。
+The current **schema 039** contains media credential columns not yet covered by the product backup exclusion review. Product backup therefore rejects the schema with **`backup_secret_schema_unsupported`**, even when those credential fields are empty. Earlier-schema restore evidence and operational PostgreSQL archives do not establish backup support for the current schema. See [maintenance documentation](apps/server/src/workbench/modules/maintenance/README.md).
 
-当前schema039包含媒体凭据列，产品内备份会因尚未纳入凭据排除审核而保护性拒绝（`backup_secret_schema_unsupported`），与是否填写凭据无关。早期schema的隔离备份恢复及运维PostgreSQL归档证据不能代替当前schema的产品备份支持，具体见[维护说明](apps/server/src/workbench/modules/maintenance/README.md)。
+Tool discovery, paginated search and line continuation, plans, code intelligence, Notebook editing, MCP resources, interactive Linux terminals, AI configuration APIs, user-synced theme and queue/steering preferences, automatic conversation naming and image-generation waiting animations are implemented. AI can list, search and read other conversations within a user-selected workspace/account scope; child agents are limited to their task tree. The built-in `read_workbench_guide` tool reads the [AI operating guide](docs/ai-guide.md) in sections. See the [acceptance record](docs/implementation-status.md) for real-browser and fixed-local-Qwen evidence.
 
-2026-10-19新增按用途发现工具、分页搜索与长行续读、计划清单、代码智能、Notebook编辑、MCP资源和Linux交互终端，并接通[AI设置发现/读取/配置接口](docs/technical/ai-configuration.md)、账户主题与队列/引导同步、普通对话自动命名及生图等待动效。037/038已部署，固定本地Qwen、实际浏览器和本机FLUX验收结果及限制见[第17节](docs/implementation-status.md#17-2026-10-19-工具补齐设置接口与交互改进)。
+- **Commands:** persistent ordinary and long-command execution supports logs and stopping. The default budget is one hour, configurable up to 24 hours. Execution currently supports Linux only. `native_scoped` maps HOME/TMP to the workspace but does not isolate host files, networks or processes.
+- **Desktop input:** X11 supports printable ASCII. Real controlled English input and manual takeover were tested. Chrome/libpinyin can drop keystrokes; observe the target application before retrying. Other desktop/platform boundaries remain documented.
+- **OS sandbox:** optional Linux bubblewrap is integrated, but the tested Spark environment returns `namespace_denied`; it does not silently fall back to host execution.
+- **Code intelligence:** TypeScript/JavaScript definitions, references and diagnostics were tested. Python definitions/references need a configured LSP server. Notebooks support cell reading and editing, without kernel execution.
+- **File processing:** Office-to-PDF, media processing and ASR require configured components and budgets. Local ASR was tested, without an accuracy benchmark. OCR currently lacks a suitable security-updated component. Arbitrary HTML/JavaScript execution is unavailable; the interface uses restricted trusted components.
+- **Native multimodal inputs:** PDF encoding for Chat/Responses/Anthropic and MP3/WAV Chat inputs are implemented with bounded metadata checks. Live acceptance against external providers remains pending; encoding support does not prove a model understands an input.
+- **Recovery:** consistent backups require a confirmed quiescent boundary and restoration to a new database/directory. Unfinished tasks wait for reconciliation instead of replaying side effects. Existing acceptance includes restored memory, version history, preserved tasks and full command-log downloads, subject to the current-schema backup limitation above. Bring-your-own databases do not automatically receive private-cluster maintenance capabilities.
 
-2026-10-26新增AI跨对话列出、关键词搜索与分段读取，用户控制工作区/账户范围，子Agent限任务树；提供可由内置工具分段读取的[AI操作说明书](docs/ai-guide.md)，并修正配置发现地址、LSP字段合同及过时入口文案。真实浏览器、固定本地Qwen及接口核对结果见[第22节](docs/implementation-status.md#22-2026-10-26-跨对话读取与-ai-操作说明)，没有新增迁移或变更固定模型。
+**Desktop screenshots may only be sent to local models. They must not be transmitted to external models.** Computer-operation actions remain subject to permissions and review. Managed and everyday browsers are separate. Explicitly configured external models, search and MCP services may receive authorized content; a local web interface does not mean every configured tool operates offline.
 
-- **本机命令**：普通命令与长命令共用持久驱动及当前审批策略。单条执行预算默认1小时，可在高级任务设置中调整至最长24小时；长命令支持持久句柄、日志和停止。当前仅Linux支持，Windows/macOS明确unsupported。`native_scoped`会把HOME/TMP映射到工作区，但不隔离文件、网络或进程访问。
-- **桌面输入**：X11 当前仅可打印 ASCII，受控英文环境的真实输入与人工接管已验收。Chrome/libpinyin 环境存在吞键兼容问题；执行后须观察目标应用确认文字，不能凭 OS 回执自动重试。Windows/macOS/Wayland 的边界见状态清单。
-- **OS 沙箱**：可选 Linux bubblewrap 已接线；当前 Spark 实测为 `namespace_denied`，不能运行该隔离模式，也不会静默降级为宿主执行。
-- **文件与生成界面**：Office转PDF、媒体处理和ASR依赖已配置组件及预算；ASR已有真实本地转写检查，不代表准确率基准。当前 OCR 缺可用安全更新组件；自由 HTML/JS 执行不可用，界面使用受限可信组件，不能当成任意网页执行器。
-- **模型原生多模态**：PDF 的 Chat/Responses/Anthropic 路线及 MP3/WAV 的 Chat 编码、输入计划和有界元数据检查已接通；缺外部凭据，尚未完成所选外部模型的真实原生输入验证。能力声明或协议编码通过不等于模型实际理解能力。
-- **备份恢复**：只在明确静止边界制作一致备份，恢复到新数据库和新目录；未结束任务保持等待核对，不自动续发副作用。本机真实恢复界面已核对记忆正文、版本历史、保留任务和完整命令日志下载；BYO数据库不自动获得私有集群维护能力。
+## Releases and documentation
 
-**电脑截图当前仅供本地模型，禁止向外部模型传输。** 电脑总开关默认开启，实际动作仍经过当前权限校验与智能审核；用户日常浏览器与受管浏览器分开。外部模型、搜索和 MCP 连接可能发送经授权的内容，需先核对目标和权限。不要把“本地 Web 页面”理解为所有已配置工具都离线运行。
-
-## 发行与文档
-
-已有[原生源码发行工具](runtime/distribution/README.md)，可包含已构建前端、逐文件清单、锁定依赖 SBOM 和许可材料：
+[Native source-release tooling](runtime/distribution/README.md) can build a package with a compiled frontend, per-file manifest, locked-dependency SBOM and license materials:
 
 ```sh
 python3.12 scripts/release/package.py build
 ```
 
-同一工具提供 `validate` 和 `stage`，只校验并暂存到新目录，不安装、迁移或切换正式入口。包不含 Python运行时、主权重、原生数据库和浏览器等完整依赖，不能声称整包离线安装就绪。升级先真实备份，再准备新版本并受控迁移；健康检查失败不能直接让旧代码运行已迁移数据库。具体步骤与签名、平台验证限制见发行说明。
+Its `validate` and `stage` commands check and stage a new directory without installing, migrating or switching the active version. Packages do not bundle Python, model weights, native databases, browsers or a complete offline runtime. Upgrade planning requires a verified backup route compatible with the actual schema, a prepared new version and controlled migration. Failed health checks do not make old code safe against an already migrated database. See the release guide for signing and platform-validation limits.
 
-- [需求与技术文档导航](docs/README.md)
-- [给AI看的工作台操作说明书](docs/ai-guide.md)（内置工具`read_workbench_guide`可分段读取）
-- [安装与平台辅助说明](runtime/installation/README.md)
-- [模型运行说明](runtime/model/README.md)
-- [文件处理组件与边界](runtime/file-processing/README.md)
-- [可选命令沙箱](runtime/sandbox/README.md)
-- [项目许可证](LICENSE)与[第三方许可说明](THIRD_PARTY_NOTICES.md)
+Detailed documentation (currently Chinese):
 
-1.0.0 的本机实现与已列真实流程已完成核对，受管停机和真实重启后的旧记录核对也已有证据。其他平台、外部提供方、完整离线依赖及升级回退矩阵等限制见状态清单；本次版本同步与源码提交不生成新的发行包。
+- [Documentation index](docs/README.md)
+- [AI operating guide](docs/ai-guide.md), also available through `read_workbench_guide`
+- [Installation and platform notes](runtime/installation/README.md)
+- [Model runtime](runtime/model/README.md)
+- [File processing components](runtime/file-processing/README.md)
+- [Optional command sandbox](runtime/sandbox/README.md)
+- [License](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md)
+
+Version 1.0.0 has completed its listed local acceptance flows, including managed shutdown and reconciliation after a real reboot. Other platforms, external providers, complete offline dependencies and the upgrade/rollback matrix retain the documented limitations. Source, release tooling and a complete installer are distinct deliverables.
+
+## Authors
+
+**任天卓 (Ren Tianzhuo) & Codex**
+
+- **任天卓:** project author; product vision, requirements and user feedback.
+- **Codex:** AI development assistant contributing architecture, implementation, documentation and verification.
+
+Original RDesk code is licensed under the [Apache License 2.0](LICENSE). Third-party software and models retain their respective licenses; see [NOTICE](NOTICE) and [third-party notices](THIRD_PARTY_NOTICES.md).

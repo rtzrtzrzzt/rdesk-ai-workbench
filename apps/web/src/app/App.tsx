@@ -1114,7 +1114,7 @@ export function App() {
         <div className="sidebar-brand">
           <button className="brand-link" onClick={() => navigate('chat')}>
             <Sparkles size={20} strokeWidth={1.45} />
-            <span>AI 工作台</span>
+            <span>RDesk</span>
           </button>
           <div className="desktop-toggle">
             <IconButton

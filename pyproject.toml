@@ -5,7 +5,8 @@ build-backend = "hatchling.build"
 [project]
 name = "ai-workbench"
 version = "1.0.0"
-description = "A native local AI workspace with durable tasks and replaceable model providers."
+description = "RDesk: an AI-friendly, local-first agent workbench with durable tasks and multi-agent collaboration."
+authors = [{ name = "任天卓" }, { name = "Codex (AI development assistant)" }]
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.12"

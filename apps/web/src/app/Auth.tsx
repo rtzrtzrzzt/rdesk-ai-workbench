@@ -24,7 +24,7 @@ export function AuthView({
         <div className="brand-mark">
           <Sparkles size={25} strokeWidth={1.45} />
         </div>
-        <span className="auth-brand">AI 工作台</span>
+        <span className="auth-brand">RDesk</span>
         <h1>继续你的本机工作。</h1>
         <p>工作台仅允许本机访问，无需登录密码。</p>
         <form

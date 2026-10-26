@@ -404,3 +404,19 @@ Chat 纯文本 length 最多安全自动接续 16 段，每段重新排队并计
 文档同步明确记录当前schema039产品备份的`backup_secret_schema_unsupported`及诊断尚不投影media队列的限制，没有修改对应逻辑或运行备份。早期备份/恢复和后续运维归档不冒充当前媒体schema的产品备份验收。
 
 uv离线锁一致性、版本与静态合同一致性、项目Markdown本地链接及提交路径检查通过，现有4项轻量运行合同检查通过；已有各阶段真实产品验收结论复用，不重新进行全量审计、模型测试或服务启停。源码、文档、测试及迁移等所有已授权成果归入本次1.0.0基线提交；凭据、运行数据、截图、权重及私有证据继续排除。此次不推送、不打tag、不生成发行包或执行迁移，运行进程保持现状，版本元数据由下次正常启停加载。
+
+## 24. 2026-10-26 RDesk 命名与 GitHub 展示准备
+
+用户确定项目名为RDesk，作者署名任天卓与Codex。README增加中英定位、能力概览、入门/说明入口和作者；NOTICE与包元数据同步署名，主文档标题、浏览器标题和侧栏品牌同步RDesk。内部Python包、CLI、API、协议及数据目录保持兼容标识，没有重命名工作目录或移动模型。
+
+按GitHub官方[仓库搜索](https://docs.github.com/en/search-github/searching-on-github/searching-for-repositories)和[Topics说明](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/classifying-your-repository-with-topics)准备简介及14项相关Topics；名称本身已有公共同名结果，建议仓库slug为rdesk-ai-workbench，品牌仍RDesk。README使用明确用途、实际功能和现有入门步骤，不承诺搜索排名，不把已准备的仓库元数据写成已在线设置。
+
+上传内容只读核对覆盖当时HEAD8813761及全部4条可达提交：589条路径、848个唯一blob，最大约0.98MiB，未发现模型权重、运行数据、截图、归档、私有配置或历史删除后隐藏路径。目录保护之外补充常见权重格式全局ignore，实际检查通过，源码modules/models未误排除；没有将权重改为LFS上传。
+
+TypeScript/Vite、uv离线锁、署名/本地链接/说明索引/忽略规则及diff检查通过。原静止门仅替换静态前端，新bundle为index-DF_bDIpW.js；真实Chrome显示RDesk标题与导航，点击返回对话、刷新均正常，页面异常0，无截图。API、Worker、数据库、模型与其它服务均未重启。GitHub仓库尚未创建或上传，本轮改动留在本地供发布前审阅，未擅自提交或打包。
+
+## 25. 2026-10-26 RDesk 中英文公开发布
+
+用户明确授权正式提交并上传GitHub。新增完整中文README.zh-CN.md，根README.md提供完整英文介绍、功能、安装步骤、操作命令、真实验收边界及已知限制；两种语言相互链接。署名任天卓与Codex，Apache-2.0及第三方许可证保持。目标公开仓库为https://github.com/rtzrtzrzzt/rdesk-ai-workbench，简介兼含中英文，Topics使用实际功能关键词。
+
+发布只推送已核对的Git源码历史与文档，不包含模型权重、推理环境、对话、上传文件、数据库、凭据或截图；私有部署配置保持排除。未构建发行归档、上传模型或更改服务及固定模型。实际推送回执与提交号保存在私有交接记录，上一节“尚未上传”是准备阶段状态。
