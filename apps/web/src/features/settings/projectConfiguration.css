@@ -1,0 +1,45 @@
+.project-configuration {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.project-configuration .section-title {
+  margin-bottom: 0;
+}
+.project-configuration label {
+  display: grid;
+  gap: 6px;
+}
+.project-configuration input {
+  width: 100%;
+  min-width: 0;
+}
+.project-configuration code,
+.project-configuration dd {
+  overflow-wrap: anywhere;
+}
+.project-configuration-path {
+  display: block;
+}
+.project-configuration pre {
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.project-storage-table {
+  overflow-x: auto;
+}
+.project-storage-table table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.project-storage-table th,
+.project-storage-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.project-storage-table td {
+  vertical-align: top;
+}

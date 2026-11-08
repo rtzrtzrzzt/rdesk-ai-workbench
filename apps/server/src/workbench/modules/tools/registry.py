@@ -60,6 +60,9 @@ class ListFiles(Arguments):
     path: str = "."
     limit: int = Field(default=500, ge=1, le=500)
     cursor: str | None = Field(default=None, max_length=2048)
+    include_runtime: bool = Field(
+        default=False, description="默认跳过运行缓存目录；指定该目录或设为true可查询其中内容。"
+    )
 
 
 class ReadFile(FileRead):
@@ -369,7 +372,8 @@ TOOLS: dict[str, ToolSpec] = {
         module="plan",
     ),
     "find_files": ToolSpec(
-        FindFiles, "按相对glob模式定位授权工作区文件，例如**/*.tsx；支持分页，保护目录不可绕过。"
+        FindFiles,
+        "按相对glob定位工作区文件；默认跳过运行缓存目录，可指定目录或include_runtime查询。支持分页，保护路径不可绕过。",
     ),
     "read_files": ToolSpec(
         ReadFiles, "批量读取最多12个文件的指定行，逐文件返回真实版本、错误及续读位置。"
@@ -581,7 +585,10 @@ TOOLS: dict[str, ToolSpec] = {
         "查看当前规则/工具前缀与上下文压缩来源；不提供密钥或隐藏推理。",
         module="context",
     ),
-    "list_files": ToolSpec(ListFiles, "列出工作区内的文件，返回有界结果。"),
+    "list_files": ToolSpec(
+        ListFiles,
+        "列出工作区文件；默认跳过运行缓存目录，可指定目录或include_runtime查询，按游标续读。",
+    ),
     "read_file": ToolSpec(ReadFile, "读取UTF-8文件的指定行，并返回供条件修改使用的版本。"),
     "read_rules": ToolSpec(
         ReadRules,
@@ -589,7 +596,8 @@ TOOLS: dict[str, ToolSpec] = {
         module="rules",
     ),
     "search_files": ToolSpec(
-        SearchFiles, "搜索工作区文本，支持字面/正则、glob、大小写、前后文和续读游标；命中保留行号。"
+        SearchFiles,
+        "搜索工作区文本，支持正则/glob/前后文和续读；默认跳过运行缓存目录，可指定目录或include_runtime查询。",
     ),
     "write_file": ToolSpec(
         WriteFile,

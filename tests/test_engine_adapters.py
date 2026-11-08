@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from workbench.config import PROJECT_ROOT
 from workbench.contracts.errors import AppError
 from workbench.modules.models import engine_adapters as adapters
 from workbench.modules.models import service
@@ -113,8 +112,18 @@ def test_unconfirmed_or_conflicting_nondefault_options_are_rejected(updates):
     }
 
 
-def test_auto_engine_uses_actual_managed_identity_but_never_guesses_remote():
-    manifest = json.loads((PROJECT_ROOT / "runtime/model/deployment.json").read_text())
+def test_auto_engine_uses_actual_managed_identity_but_never_guesses_remote(tmp_path, monkeypatch):
+    # Exercise the declared identity without requiring a developer's private deployment.
+    manifest = {
+        "served_model_name": "Qwen3.8-Flash-Next",
+        "host": "127.0.0.1",
+        "port": 30000,
+        "engine": "sglang",
+    }
+    directory = tmp_path / "runtime/model"
+    directory.mkdir(parents=True)
+    (directory / "deployment.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(adapters, "PROJECT_ROOT", tmp_path)
     config = _config(
         engine_kind="auto",
         model_identifier=manifest["served_model_name"],

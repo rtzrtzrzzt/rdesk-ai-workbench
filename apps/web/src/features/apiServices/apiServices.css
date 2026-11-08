@@ -1,0 +1,199 @@
+.api-services-panel {
+  display: grid;
+  gap: 24px;
+}
+.api-service-section {
+  min-width: 0;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.api-service-section h3,
+.api-service-section h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 550;
+}
+.api-service-section h4 {
+  font-size: 13px;
+}
+.api-service-section .page-note {
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+}
+.api-service-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.api-service-row > div:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.api-service-row strong {
+  font-weight: 550;
+}
+.api-service-row p,
+.api-service-row small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 4px 0 0;
+}
+.api-service-form {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.api-service-form fieldset {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  border: 0;
+  margin: 12px 0 16px;
+  padding: 0;
+}
+.api-service-form label,
+.api-key-create label {
+  display: grid;
+  gap: 7px;
+  color: var(--fg);
+  font-size: 12px;
+}
+.api-service-form input:not([type='checkbox']),
+.api-service-form select,
+.api-service-form textarea,
+.api-key-create input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--fg);
+  background: var(--surface);
+  font: inherit;
+}
+.api-service-form textarea {
+  resize: vertical;
+}
+.api-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.api-service-form label.api-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.api-tools {
+  display: grid;
+  gap: 10px;
+  font-size: 12px;
+}
+.api-tools > label {
+  display: flex;
+  align-items: start;
+  gap: 8px;
+}
+.api-tools > label > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.api-tools input {
+  margin-top: 3px;
+}
+.api-tools small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+  margin-top: 3px;
+}
+.api-client-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.api-client-list > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.api-client-list > button.selected,
+.api-client-list > button:hover {
+  background: var(--hover);
+}
+.api-client-details {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.api-client-subsection {
+  margin-top: 24px;
+}
+.api-key-create {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  margin: 14px 0;
+}
+.api-once-key {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.api-once-key > code {
+  user-select: all;
+  overflow-wrap: anywhere;
+  padding: 10px;
+  background: var(--surface);
+}
+.api-action-options {
+  display: grid;
+  gap: 10px;
+}
+.api-listener-address {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.api-service-form details > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  font-size: 12px;
+}
+.api-service-form details > label {
+  margin-top: 12px;
+}
+@media (max-width: 600px) {
+  .api-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .api-service-row,
+  .api-key-create {
+    flex-wrap: wrap;
+    align-items: start;
+  }
+  .api-service-form,
+  .api-client-details {
+    padding: 12px;
+  }
+}

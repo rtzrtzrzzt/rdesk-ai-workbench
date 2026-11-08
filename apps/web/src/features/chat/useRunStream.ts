@@ -57,6 +57,8 @@ export function useRunStream(run: Run | undefined, threadId: string, enabled: bo
       if (ended) {
         void client.invalidateQueries({ queryKey: ['thread-context', threadId] })
         void client.invalidateQueries({ queryKey: ['thread-activity', threadId] })
+        void client.invalidateQueries({ queryKey: ['thread-presentation', threadId] })
+        void client.invalidateQueries({ queryKey: ['run-changes', threadId] })
         void client.invalidateQueries({ queryKey: ['run-agents', value.run.root_run_id ?? id] })
       }
       return value.run.last_event_seq
@@ -111,6 +113,8 @@ export function useRunStream(run: Run | undefined, threadId: string, enabled: bo
               void client.invalidateQueries({ queryKey: ['messages', threadId] })
               void client.invalidateQueries({ queryKey: ['thread-context', threadId] })
               void client.invalidateQueries({ queryKey: ['thread-activity', threadId] })
+              void client.invalidateQueries({ queryKey: ['thread-presentation', threadId] })
+              void client.invalidateQueries({ queryKey: ['run-changes', threadId] })
               void client.invalidateQueries({ queryKey: ['tool-details', threadId] })
             }
           },

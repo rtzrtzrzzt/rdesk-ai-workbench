@@ -13,6 +13,10 @@
 .runtime/
 .tools/
 .local/
+.agents/
+.codex/
+# Deployment identity and capability evidence belong to the local machine.
+/runtime/model/deployment.json
 __pycache__/
 *.py[cod]
 *.egg-info/

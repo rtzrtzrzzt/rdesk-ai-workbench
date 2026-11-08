@@ -38,6 +38,9 @@ def memory_fingerprint(db, run):
     document = or_(
         MemoryDocument.workspace_id == run.workspace_id, MemoryDocument.workspace_id.is_(None)
     )
+    if getattr(run, "execution_origin", "owner") == "api":
+        scope = MemoryScope.workspace_id == run.workspace_id
+        document = MemoryDocument.workspace_id == run.workspace_id
     values = [
         list(
             db.execute(

@@ -8,11 +8,34 @@ from workbench.modules import conversation_deletion as deletion
 from workbench.modules import conversation_dto as dto
 from workbench.modules import conversation_lifecycle as lifecycle
 from workbench.modules import conversation_queue as queue
+from workbench.modules.changes import dto as changes_dto
+from workbench.modules.changes import service as changes
 from workbench.modules.context import dto as context_dto
 from workbench.modules.context import service as context_service
-from workbench.modules.runs import activity, safety
+from workbench.modules.runs import activity, presentation, safety
 
 router = APIRouter(prefix="/api/v1", responses=ERROR_RESPONSES)
+
+
+@router.get(
+    "/threads/{thread_id}/presentation", response_model=presentation.ConversationPresentation
+)
+def conversation_presentation(thread_id: UUID, db: SNAPSHOT, user: USER):
+    return presentation.view(db, user.id, str(thread_id))
+
+
+@router.get("/threads/{thread_id}/changes", response_model=changes_dto.ChangeSetView)
+def change_set(thread_id: UUID, db: SNAPSHOT, user: USER, run_id: UUID | None = None):
+    return changes.view(db, user.id, str(thread_id), str(run_id) if run_id else None)
+
+
+@router.get("/threads/{thread_id}/changes/{change_id}", response_model=changes_dto.ChangeDetails)
+def change_details(
+    thread_id: UUID, change_id: UUID, db: SNAPSHOT, user: USER, run_id: UUID | None = None
+):
+    return changes.details(
+        db, user.id, str(thread_id), str(change_id), str(run_id) if run_id else None
+    )
 
 
 @router.get("/threads/{thread_id}/context", response_model=context_dto.ContextView)

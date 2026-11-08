@@ -49,6 +49,12 @@ class ProviderConfig:
     reasoning_adapter: str = "auto"
     native_reasoning_efforts: tuple[str, ...] = ()
     prompt_template: dict | None = None
+    # Internal execution provenance; never accepted as a model connection option.
+    run_id: str | None = None
+    local_contract: str | None = None
+    replay_context: str | None = None
+    replay_message_count: int = 0
+    replay_characters: int = 0
 
 
 @dataclass
@@ -269,10 +275,13 @@ def _tool_event(call: dict, allowed: dict, provider: str, call_index: int) -> Pr
         reason = "unknown_tool_name"
     if reason:
         raise _tool_identity_error(call, allowed, reason, provider, call_index)
-    return ProviderEvent(
-        "tool_call",
-        {"id": identifier, "name": name, "arguments": _arguments(call.get("arguments"))},
-    )
+    arguments = _arguments(call.get("arguments"))
+    data = {"id": identifier, "name": name, "arguments": arguments}
+    if provider == "openai_compatible" and isinstance(call.get("arguments"), str):
+        # Preserve the validated native JSON, rather than changing whitespace or
+        # escaping before the model sees its own tool call in the next request.
+        data["_arguments_json"] = call["arguments"]
+    return ProviderEvent("tool_call", data)
 
 
 def _complete_calls(calls: list[dict], allowed: dict, provider: str) -> list[ProviderEvent]:
@@ -387,6 +396,38 @@ def _anthropic_input(messages: list[dict]) -> tuple[list[dict], list[dict]]:
     return system, result
 
 
+def _chat_input(config, messages, tools, options):
+    from workbench.modules.models.chat_replay import restore
+
+    wire = [
+        {
+            key: _input_content(value, "openai_compatible", message.get("role"))
+            if key == "content" else value
+            for key, value in message.items()
+            if key in ("role", "content", "tool_calls", "tool_call_id", "name")
+        }
+        for message in messages
+    ]
+    return restore(config, messages, wire, tools, options)
+
+
+def prepare_chat_replay(config, messages, tools):
+    """Project eligible reasoning before both exact counting and fallback budgets."""
+    from workbench.modules.models.engine_adapters import request_options
+
+    config.replay_context = None
+    if PROVIDERS.get(config.provider_type) != "openai_compatible":
+        return messages
+    wire, config.replay_context = _chat_input(config, messages, tools, request_options(config))
+    result = []
+    for source, item in zip(messages, wire, strict=True):
+        source = {key: value for key, value in source.items() if key != "reasoning_content"}
+        if "reasoning_content" in item:
+            source["reasoning_content"] = item["reasoning_content"]
+        result.append(source)
+    return result
+
+
 def _request(config: ProviderConfig, messages: list[dict], tools: list[dict]):
     from workbench.modules.models.engine_adapters import request_options, resolve_engine
 
@@ -420,6 +461,7 @@ def _request(config: ProviderConfig, messages: list[dict], tools: list[dict]):
         path = (path or "/v1") + resource
     url = urlunsplit((endpoint.scheme, endpoint.netloc, path, "", ""))
     allowed = _tools(tools)
+    options = request_options(config)
     body = {"model": config.model_identifier, "stream": True}
     headers = {"Accept": "text/event-stream", "Content-Type": "application/json"}
     if config.api_key:
@@ -436,18 +478,13 @@ def _request(config: ProviderConfig, messages: list[dict], tools: list[dict]):
         if tools:
             body["tools"] = [{"type": "function", **function} for function in allowed.values()]
     elif provider == "openai_compatible":
-        # Only transport known OpenAI message fields, never private checkpoint metadata.
+        # Only transport known wire fields; native reasoning requires the verified
+        # current-chain provenance gate, never arbitrary checkpoint metadata.
+        wire, config.replay_context = _chat_input(config, messages, tools, options)
+        config.replay_message_count = sum("reasoning_content" in item for item in wire)
+        config.replay_characters = sum(len(item.get("reasoning_content", "")) for item in wire)
         body.update(
-            messages=[
-                {
-                    key: _input_content(value, provider, message.get("role"))
-                    if key == "content"
-                    else value
-                    for key, value in message.items()
-                    if key in ("role", "content", "tool_calls", "tool_call_id", "name")
-                }
-                for message in messages
-            ],
+            messages=wire,
             max_tokens=config.max_output_tokens,
             stream_options={"include_usage": True},
         )
@@ -477,7 +514,7 @@ def _request(config: ProviderConfig, messages: list[dict], tools: list[dict]):
                 }
                 for name, function in allowed.items()
             ]
-    body.update(request_options(config))
+    body.update(options)
     if config.temperature is not None:
         body["temperature"] = config.temperature
     payload = _json(body).encode()
@@ -630,7 +667,7 @@ def _tool_preparation(index: int, call: dict, allowed: dict) -> ProviderEvent:
 
 
 async def _chat(
-    events, allowed: dict, cache_observation="standard"
+    events, allowed: dict, cache_observation="standard", *, zero_cache_on_missing=False
 ) -> AsyncIterator[ProviderEvent]:
     calls, usage, finish = {}, None, None
     cache_details = None
@@ -642,8 +679,8 @@ async def _chat(
             if usage is not None:
                 event = _usage("openai_compatible", usage)
                 if cache_observation == "sglang":
-                    # Standard details can contain a default zero while reporting is
-                    # disabled. Only observed extension counters are evidence here.
+                    # The audited local 0.5.21 protocol omits extension details for
+                    # zero hits. Other endpoints and incomplete streams stay unknown.
                     event.data["cache_read_input_tokens"] = None
                     if cache_details is not None:
                         counts = [_count(cache_details.get(key)) for key in ("device", "host")]
@@ -652,6 +689,9 @@ async def _chat(
                             event.data["cache_read_input_tokens"] = sum(counts) + (storage or 0)
                         event.data["cache_details"] = cache_details
                         event.data["cache_source"] = "sglang.request.cached_tokens_details"
+                    elif zero_cache_on_missing and event.data["input_tokens_total"] is not None:
+                        event.data["cache_read_input_tokens"] = 0
+                        event.data["cache_source"] = "sglang.0.5.21.zero_without_details"
                 yield event
             complete = (
                 []
@@ -952,6 +992,10 @@ async def stream_model(
     Persist provider_output on the corresponding assistant message for exact replay.
     """
     try:
+        from workbench.modules.models.managed import SGLANG_CONTRACT, verified_contract
+
+        if config.cache_observation == "sglang":
+            config.local_contract = await asyncio.to_thread(verified_contract, config)
         provider, url, headers, payload, allowed = _request(config, messages, tools)
         handlers = {
             "openai_compatible": _chat,
@@ -966,7 +1010,10 @@ async def stream_model(
             async with client.stream("POST", url, headers=headers, content=payload) as response:
                 await _check_http(response)
                 events = (
-                    _chat(_sse(response), allowed, config.cache_observation)
+                    _chat(
+                        _sse(response), allowed, config.cache_observation,
+                        zero_cache_on_missing=config.local_contract == SGLANG_CONTRACT,
+                    )
                     if provider == "openai_compatible"
                     else handlers[provider](_sse(response), allowed)
                 )

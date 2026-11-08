@@ -4,6 +4,7 @@ import os
 import signal
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from workbench.config import PROJECT_ROOT, get_settings
@@ -53,6 +54,25 @@ def authorized_path(root: Path, value: str) -> Path:
             raise AppError(
                 "protected_path", "不能通过任务工具访问工作台凭据或模型权重。", 403, "policy"
             )
+    from workbench.contracts.execution import current_scope
+
+    scope = current_scope.get()
+    if scope and relative.parts and relative.parts[0] == "_sources":
+        parts = relative.parts
+        permitted = len(parts) == 1 or (
+            len(parts) >= 2 and scope.source_revision and parts[1] == scope.source_revision
+        )
+        if permitted and len(parts) > 2:
+            from pathlib import PurePosixPath
+
+            source = PurePosixPath(*parts[2:])
+            permitted = any(
+                source.is_relative_to(PurePosixPath(path))
+                or (candidate.is_dir() and PurePosixPath(path).is_relative_to(source))
+                for path in scope.source_paths
+            )
+        if not permitted:
+            raise AppError("source_not_allowed", "来源不属于此发布版本的当前授权。", 403, "policy")
     return candidate
 
 
@@ -104,10 +124,12 @@ def _walk_files(root: Path, path: Path, *, limit: int) -> tuple[list[Path], bool
     return found, False
 
 
-def list_files(root: Path, value: str, *, cursor=None, limit=500) -> dict:
+def list_files(root: Path, value: str, *, cursor=None, limit=500, include_runtime=False) -> dict:
     from workbench.modules.tools.file_queries import find_files
 
-    return find_files(root, {"path": value, "cursor": cursor, "limit": limit})
+    return find_files(
+        root, {"path": value, "cursor": cursor, "limit": limit, "include_runtime": include_runtime}
+    )
 
 
 async def search_files(root: Path, values: dict) -> dict:
@@ -167,7 +189,16 @@ def read_file(root: Path, values: dict) -> dict:
     }
 
 
-def change_file(root: Path, values: dict, *, patch: bool) -> dict:
+@dataclass(frozen=True)
+class PreparedFileChange:
+    path: Path
+    version: str
+    before: bytes | None
+    after: bytes
+
+
+def prepare_file_change(root: Path, values: dict, *, patch: bool) -> PreparedFileChange:
+    """Read-only checks shared by approval preflight and the locked write boundary."""
     path = authorized_path(root, values["path"])
     if (root / values["path"]).is_symlink():
         raise AppError(
@@ -190,24 +221,63 @@ def change_file(root: Path, values: dict, *, patch: bool) -> dict:
         raise AppError("file_too_large", "新文件超过基础文本工具容量。")
     if not path.parent.is_dir():
         raise AppError("parent_not_found", "父目录不存在，请先选择已有目录。", 404)
+    return PreparedFileChange(
+        path=path,
+        version=version,
+        before=current.encode("utf-8") if version != "missing" else None,
+        after=encoded,
+    )
+
+
+def change_file(
+    root: Path,
+    values: dict,
+    *,
+    patch: bool,
+    before_write=None,
+    before_replace=None,
+    after_write=None,
+) -> dict:
+    prepared = prepare_file_change(root, values, patch=patch)
+    path, version, encoded = prepared.path, prepared.version, prepared.after
     # Only cooperating writers share the application lock. External editor races remain possible.
     descriptor, temporary = tempfile.mkstemp(prefix=".workbench-write-", dir=path.parent)
+    change_id = None
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(encoded)
             stream.flush()
             os.fsync(stream.fileno())
+        if before_write is not None:
+            change_id = before_write(path, prepared.before, encoded)
+        if before_replace is not None:
+            before_replace()
+        # The durable intent can outlive a worker. Recheck after its commit, while
+        # still holding the caller's file lock, before performing any replacement.
+        authorized_path(root, str(path))
+        if path.is_symlink() or (root / values["path"]).is_symlink():
+            raise AppError(
+                "symlink_write_denied", "目标已成为符号链接，未执行覆盖。", 409, "policy"
+            )
+        actual_version = read_text(path)[1] if path.exists() else "missing"
+        if actual_version != version:
+            raise AppError("file_version_conflict", "文件在写入前已改变，未执行覆盖。", 409)
         if path.exists():
             os.chmod(temporary, path.stat().st_mode & 0o777)
         os.replace(temporary, path)
+        if after_write is not None:
+            after_write(change_id)
     finally:
         Path(temporary).unlink(missing_ok=True)
-    return {
+    result = {
         "path": str(path.relative_to(root)),
         "previous_version": version,
         "version": hashlib.sha256(encoded).hexdigest(),
         "bytes": len(encoded),
     }
+    if change_id is not None:
+        result["change_id"] = change_id
+    return result
 
 
 async def stop_process(process: asyncio.subprocess.Process) -> None:

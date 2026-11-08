@@ -170,6 +170,21 @@ export function SubagentTranscript({
           workspaceId={workspaceId}
           messages={timelineMessages}
           runs={turns}
+          renderReasoning={(message) => {
+            if (communicationById.has(message.id)) return null
+            const thought = reasoning[message.id] ?? message.reasoning ?? ''
+            return thought.trim() ? (
+              <Thinking
+                text={thought}
+                active={
+                  message.status === 'streaming' &&
+                  !(streaming[message.id] ?? message.content).trim() &&
+                  run.status === 'running'
+                }
+                workspaceId={workspaceId}
+              />
+            ) : null
+          }}
           renderMessage={(message) => {
             const communication = communicationById.get(message.id)
             if (communication) {
@@ -222,13 +237,6 @@ export function SubagentTranscript({
                   <div className="message-author">已保留部分输出</div>
                 )}
                 <div className="message-body">
-                  <Thinking
-                    text={thought}
-                    active={
-                      message.status === 'streaming' && !content.trim() && run.status === 'running'
-                    }
-                    workspaceId={workspaceId}
-                  />
                   <MessageContent content={content} workspaceId={workspaceId} />
                 </div>
               </article>

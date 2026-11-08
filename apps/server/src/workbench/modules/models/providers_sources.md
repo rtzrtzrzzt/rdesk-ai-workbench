@@ -67,6 +67,8 @@ SGLang 的请求 `rid` 和 loopback `/abort_request` 定向取消按引擎识别
 
 ## 限制与验证状态
 
+2026-10-28本机兼容增量：`managed.verified_contract`只对严格匹配清单的本地配方GET`/server_info`，有界读取并短期缓存版本/模型身份。已审0.5.21的[`get_cached_tokens_details`](https://github.com/sgl-project/sglang/blob/v0.5.21/python/sglang/srt/managers/scheduler_components/output_streamer.py)在零命中时返回None；仅完整usage/DONE采用该零值语义。`chat_replay`以已过滤实际输入的连续指纹限定Qwen当前工具链思考，跨新输入、任务、模型或来源变化不重放；计数和请求复用同一投影，摘要不读入这些私有字段。这些行为不改变未知引擎与远程协议，不修改MTP、缓存容量或服务端模板。
+
 HTTP transport `retries=0`，适配器没有隐藏重试；生成超时按无有效事件的空闲时长计算，同时保留 HTTP 分阶段超时，持续正常输出不会因为总用时超过该值被中断。依据：[HTTPX timeout](https://www.python-httpx.org/advanced/timeouts/)。运行层对安全的 Chat 纯文本 length 片段最多自动接续 16 次，每次重新排队并计实际模型尝试；不完整工具或不透明协议不会盲目续接。SSE 按 UTF-8 增量读取，支持 LF、CRLF、CR 与多行 data；未结束的帧被丢弃，缺少协议终止事件会报错。单请求上限 16 MiB、总流上限 32 MiB、单事件/行上限 2 MiB、单工具参数上限 1 MiB、输出块/工具索引上限 128。超限明确失败，不能执行部分工具参数。
 
 Python 编译及项目 Ruff 辅助检查已通过。后续本地 OpenAI-compatible / SGLang 连接已有真实文字流、工具往返、图像及工作台持久问答证据；2026-10-18 的 `audit-chat-ui-evidence.json` 还记录默认模型继承、连接/版本预检、补充输入与刷新正文。没有使用模拟服务或假模型响应填补证据。外部 Responses/Anthropic 的真实调用、reasoning opaque 回放、额度错误及原生 PDF/音频理解仍 **等待真实模型连接验收**；本地 Chat 通过不等于跨厂商所有扩展均支持，也未执行付费 API 验收。

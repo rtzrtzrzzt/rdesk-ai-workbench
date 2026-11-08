@@ -59,11 +59,11 @@ def add(db, user_id, thread_id, values):
             >= 100
         ):
             raise AppError("queue_full", "待发送消息已达100条，请先处理队列。", 409)
-        options = resolve(
-            db,
-            user_id,
-            thread.workspace_id,
-            task_options=values.get("options"),
+        from workbench.modules.access.service import binding_for_thread, defaults_for_binding
+
+        binding = binding_for_thread(db, thread)
+        options = defaults_for_binding(binding) if binding else resolve(
+            db, user_id, thread.workspace_id, task_options=values.get("options"),
             task_model=values.get("model_connection_id"),
         )
         from workbench.modules.files.inputs import lock_attachments, validate_attachments
@@ -100,6 +100,10 @@ def add(db, user_id, thread_id, values):
             "options": options.options.model_dump(mode="json"),
             "expected_model": {"connection_id": model.id, "version": model.version},
         }
+        if binding:
+            payload["_execution_binding_id"] = binding.id
+            payload["model_connection_id"] = binding.snapshot["model_connection_id"]
+            payload["options"] = binding.snapshot["runtime_options"]
         payload["wait_for_run_id"] = db.scalar(
             select(Run.id)
             .where(Run.thread_id == thread_id, Run.status.not_in(TERMINAL_STATUSES))
@@ -156,9 +160,12 @@ def dispatch(db, thread):
         return
     payload = {key: value for key, value in row.payload.items() if key != "wait_for_run_id"}
     payload["request_id"] = str(uuid5(UUID(row.id), "dispatch"))
+    binding_id = payload.pop("_execution_binding_id", None)
     try:
         with db.begin_nested():
-            result = create_run(db, thread.user_id, thread.id, payload)
+            result = create_run(
+                db, thread.user_id, thread.id, payload, execution_binding_id=binding_id
+            )
     except AppError as error:
         row.error = {"code": error.code, "message": error.message}
         row.status = "paused"

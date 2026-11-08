@@ -254,6 +254,12 @@ def _dispatch(identifier):
         if row.status != "reserved":
             return view(row)
         row.status = "launching"
+        capture_root = workspace(db, run.user_id, run.workspace_id).root_path
+    # Baseline publication is durable before launch, independent of the command's
+    # business result. Its bounded scan never launches, stops or retries a process.
+    from workbench.modules.changes.service import begin_command_safely, finish_command_safely
+
+    begin_command_safely(identifier, capture_root)
     with Session(engine()) as db, db.begin():
         reference = db.get(CommandExecution, identifier)
         run = db.scalar(select(Run).where(Run.id == reference.run_id).with_for_update())
@@ -304,7 +310,9 @@ def _dispatch(identifier):
                 "code": "command_launch_unknown",
                 "message": "启动回执尚未确认，不会重复启动。",
             }
-        return view(row)
+        result_view = view(row)
+    finish_command_safely(identifier)
+    return result_view
 
 
 async def start(run_id, operation_id, values):
@@ -319,7 +327,11 @@ async def start(run_id, operation_id, values):
         identifier, fresh = await asyncio.to_thread(_reserve, run_id, operation_id, values)
     if fresh:
         try:
-            return await asyncio.to_thread(_dispatch, identifier)
+            command = await asyncio.to_thread(_dispatch, identifier)
+            from workbench.modules.changes.service import finish_command_safely
+
+            await asyncio.to_thread(finish_command_safely, identifier)
+            return command
         except BaseException:
             await asyncio.shield(asyncio.to_thread(_request_id_stop, identifier))
             raise
@@ -614,7 +626,11 @@ def _save_reboot_closure(identifier, proof):
             "code": "command_resources_released_after_reboot",
             "message": "系统重启已确认旧进程资源释放；原命令执行结果仍未知，原回执与日志已保留。",
         }
-        return view(row)
+        result_view = view(row)
+    from workbench.modules.changes.service import finish_command_safely
+
+    finish_command_safely(identifier)
+    return result_view
 
 
 def reconcile_after_reboot(identifier, *, legacy_prior_boot_id=None):
@@ -638,9 +654,13 @@ def reconcile_after_reboot(identifier, *, legacy_prior_boot_id=None):
 
 
 def reconcile(identifier, *, observation_only=False):
+    from workbench.modules.changes.service import finish_command_safely
     from workbench.modules.processes import native
 
     with write_gate():
+        # This also completes captures left pending across a service restart.
+        # Open/unknown resources remain pending and are never stopped by capture.
+        finish_command_safely(identifier)
         with Session(engine()) as db:
             row = db.get(CommandExecution, identifier)
             if row is None:
@@ -718,6 +738,7 @@ def reconcile(identifier, *, observation_only=False):
             publish = row.resources_closed and len(row.log_artifacts) != 2
         if publish and not observation_only:
             _publish_logs(identifier)
+        finish_command_safely(identifier)
         with Session(engine()) as db:
             return view(db.get(CommandExecution, identifier))
 

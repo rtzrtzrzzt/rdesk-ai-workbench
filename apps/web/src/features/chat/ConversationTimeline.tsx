@@ -3,11 +3,13 @@ import type { ReactNode } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Check, ChevronRight, CircleAlert, LoaderCircle, Wrench } from 'lucide-react'
 import { api } from '../../api/workbench'
+import { presentationApi } from '../../api/presentation'
 import type { ActivityItem, Message, Run } from '../../api/types'
 import { Button } from '../../components/ui'
 import { runLabel, runTerminal } from './runState'
 import { RunDuration } from './RunDuration'
 import { InlineMediaTask } from './InlineMediaTask'
+import { RunChanges } from './RunChanges'
 
 function ResultPreview({ result }: { result: Record<string, unknown> }) {
   const sources = Array.isArray(result.results)
@@ -167,6 +169,7 @@ export function ConversationTimeline({
   messages,
   runs,
   renderMessage,
+  renderReasoning,
   renderRun,
 }: {
   threadId: string
@@ -174,8 +177,10 @@ export function ConversationTimeline({
   messages: Message[]
   runs: Run[]
   renderMessage: (message: Message) => ReactNode
+  renderReasoning?: (message: Message) => ReactNode
   renderRun?: (run: Run) => ReactNode
 }) {
+  const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({})
   const live = runs.some(
     (run) => !runTerminal.has(run.status) && !['paused', 'held'].includes(run.status),
   )
@@ -187,6 +192,26 @@ export function ConversationTimeline({
     enabled: !!threadId,
     refetchInterval: live ? 2500 : false,
   })
+  const presentation = useQuery({
+    queryKey: ['thread-presentation', threadId],
+    queryFn: ({ signal }) => presentationApi.thread(threadId, signal),
+    enabled: !!threadId,
+    refetchInterval: live ? 2500 : false,
+  })
+  const groups = new Map(presentation.data?.groups.map((group) => [group.run_id, group]))
+  const finalizedRuns = new Set(
+    presentation.data?.groups
+      .filter((group) =>
+        messages.some(
+          (message) =>
+            message.id === group.final_message_id &&
+            message.role === 'assistant' &&
+            !message.id.startsWith('agent-message:') &&
+            (!!message.content.trim() || !!message.attachments.length),
+        ),
+      )
+      .map((group) => group.run_id),
+  )
   const items = useMemo(() => {
     const tools = [
       ...new Map(
@@ -222,10 +247,120 @@ export function ConversationTimeline({
   })
   const footer = (run: Run) => (
     <>
+      {groups.get(run.id)?.completion_summary && (
+        <section className="run-completion-summary" role="status" aria-label="工作台执行摘要">
+          <strong>工作台执行摘要</strong>
+          <p>{groups.get(run.id)!.completion_summary}</p>
+        </section>
+      )}
+      {groups.has(run.id) && (
+        <RunChanges
+          threadId={threadId}
+          group={groups.get(run.id)!}
+          live={!runTerminal.has(run.status)}
+        />
+      )}
       {renderRun?.(run)}
       {run.kind === 'agent' && <RunDuration run={run} />}
     </>
   )
+  type ProcessEntry = { key: string; runId: string; node: ReactNode }
+  const content: ReactNode[] = []
+  let pending: ProcessEntry[] = []
+  const segmentCounts = new Map<string, number>()
+  const flushProcess = () => {
+    if (!pending.length) return
+    const entries = pending
+    pending = []
+    const runId = entries[0].runId
+    // Keep live entries in the timeline; only a sealed reply gets a process summary.
+    if (!finalizedRuns.has(runId)) {
+      entries.forEach((entry) => content.push(<Fragment key={entry.key}>{entry.node}</Fragment>))
+      return
+    }
+    const group = groups.get(runId)
+    const continuation = (segmentCounts.get(runId) ?? 0) > 0
+    segmentCounts.set(runId, (segmentCounts.get(runId) ?? 0) + 1)
+    const open = expandedRuns[runId] ?? false
+    const elapsed = group?.elapsed_ms
+    const seconds = elapsed === null || elapsed === undefined ? null : Math.floor(elapsed / 1000)
+    content.push(
+      <section className="run-process" key={`process:${entries[0].key}`} data-process-run={runId}>
+        <button
+          type="button"
+          className="run-process-heading"
+          aria-expanded={open}
+          onClick={() => setExpandedRuns((old) => ({ ...old, [runId]: !open }))}
+        >
+          <ChevronRight size={14} className={open ? 'expanded' : ''} />
+          <span>{continuation ? '处理过程（续）' : '处理过程'}</span>
+          {!continuation && group && (
+            <small>
+              {group.tool_count} 次工具调用
+              {seconds !== null &&
+                ` · 用时 ${seconds < 60 ? `${seconds}秒` : `${Math.floor(seconds / 60)}分${seconds % 60}秒`}`}
+            </small>
+          )}
+        </button>
+        {open && (
+          <div className="run-process-content">
+            {entries.map((entry) => (
+              <Fragment key={entry.key}>{entry.node}</Fragment>
+            ))}
+          </div>
+        )}
+      </section>,
+    )
+  }
+  const append = (key: string, node: ReactNode, processRun?: string | null) => {
+    if (node === null || node === undefined || node === false) return
+    if (processRun) {
+      if (pending.length && pending[0].runId !== processRun) flushProcess()
+      pending.push({ key, runId: processRun, node })
+    } else {
+      flushProcess()
+      content.push(<Fragment key={key}>{node}</Fragment>)
+    }
+  }
+  items.forEach((item, index) => {
+    if (item.message) {
+      const message = item.message
+      // Collaboration notifications are synthetic assistant entries, never a final answer.
+      const assistant = message.role === 'assistant' && !message.id.startsWith('agent-message:')
+      const important = ['failed', 'outcome_unknown'].includes(message.status)
+      const processRun = assistant && !important ? message.run_id : null
+      append(`reasoning:${item.id}`, renderReasoning?.(message), processRun)
+      const final = groups.get(item.runId ?? '')?.final_message_id === item.id
+      append(item.id, renderMessage(message), final ? null : processRun)
+    } else if (item.tool) {
+      const tool = item.tool
+      const important =
+        !!tool.error ||
+        !!tool.media_run_id ||
+        ['failed', 'outcome_unknown', 'waiting_input', 'waiting_approval', 'pending'].includes(
+          tool.status,
+        ) ||
+        ['outcome_unknown', 'needs_reconciliation'].includes(tool.effect_status)
+      append(
+        item.id,
+        <ToolActivity
+          item={tool}
+          threadId={threadId}
+          workspaceId={workspaceId}
+          live={
+            live &&
+            !runTerminal.has(runs.find((run) => run.id === item.runId)?.status ?? 'succeeded')
+          }
+        />,
+        important ? null : item.runId,
+      )
+    }
+    if (item.runId && lastIndex.get(item.runId) === index) {
+      const run = runs.find((run) => run.id === item.runId)
+      if (run) append(`footer:${run.id}`, footer(run))
+    }
+  })
+  flushProcess()
   return (
     <>
       {activity.hasNextPage && (
@@ -243,29 +378,13 @@ export function ConversationTimeline({
           <Button onClick={() => void activity.refetch()}>重新读取进度</Button>
         </div>
       )}
-      {items.map((item, index) => (
-        <Fragment key={item.id}>
-          {item.message ? (
-            renderMessage(item.message)
-          ) : item.tool ? (
-            <ToolActivity
-              item={item.tool}
-              threadId={threadId}
-              workspaceId={workspaceId}
-              live={
-                live &&
-                !runTerminal.has(runs.find((run) => run.id === item.runId)?.status ?? 'succeeded')
-              }
-            />
-          ) : null}
-          {item.runId &&
-            lastIndex.get(item.runId) === index &&
-            (() => {
-              const run = runs.find((run) => run.id === item.runId)
-              return run ? footer(run) : null
-            })()}
-        </Fragment>
-      ))}
+      {presentation.isError && (
+        <div className="activity-read-error" role="alert">
+          <p>处理摘要暂时无法读取，执行过程仍会完整显示。</p>
+          <Button onClick={() => void presentation.refetch()}>重新读取摘要</Button>
+        </div>
+      )}
+      {content}
       {runs
         .filter((run) => !lastIndex.has(run.id))
         .map((run) => (

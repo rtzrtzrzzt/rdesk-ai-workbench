@@ -254,7 +254,9 @@ def idempotent(
     return response
 
 
-def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
+def create_run(
+    db: Session, user_id: str, thread_id: str, values: dict, *, execution_binding_id=None
+) -> dict:
     def execute() -> dict:
         thread = conversation_service.get_thread(db, user_id, thread_id, lock=True)
         from workbench.modules.conversation_queue import ensure_writable
@@ -271,15 +273,20 @@ def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
         )
         if active:
             raise AppError("thread_busy", "这个会话还有任务在进行，请补充输入或先停止任务。", 409)
+        from workbench.modules.access.service import binding_for_thread, defaults_for_binding
         from workbench.modules.preferences.service import resolve as runtime_defaults
 
-        defaults = runtime_defaults(
-            db,
-            user_id,
-            thread.workspace_id,
-            task_options=values.get("options"),
-            task_model=values.get("model_connection_id"),
-        )
+        binding = binding_for_thread(db, thread, execution_binding_id)
+        if binding:
+            defaults = defaults_for_binding(binding)
+        else:
+            defaults = runtime_defaults(
+                db,
+                user_id,
+                thread.workspace_id,
+                task_options=values.get("options"),
+                task_model=values.get("model_connection_id"),
+            )
         if not defaults.model_connection_id:
             raise AppError("model_not_selected", "请为本次任务或默认设置选择模型连接。", 422)
         model = model_service.get(db, user_id, defaults.model_connection_id, lock=True)
@@ -316,7 +323,7 @@ def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
         options = defaults.options.model_dump(mode="json")
         from workbench.modules.extensions.service import freeze as freeze_extensions
 
-        extensions = freeze_extensions(db, user_id, thread.workspace_id)
+        extensions = [] if binding else freeze_extensions(db, user_id, thread.workspace_id)
         run = Run(
             id=new_id(),
             user_id=user_id,
@@ -324,6 +331,8 @@ def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
             thread_id=thread_id,
             model_connection_id=model.id,
             input=values["input"],
+            execution_origin="api" if binding else "owner",
+            execution_binding_id=binding.id if binding else None,
             deadline_at=(
                 now() + timedelta(seconds=values["deadline_seconds"])
                 if values.get("deadline_seconds")
@@ -338,11 +347,21 @@ def create_run(db: Session, user_id: str, thread_id: str, values: dict) -> dict:
                 "runtime_options": options,
                 "runtime_options_sources": defaults.sources,
                 "runtime_options_source": "task" if values.get("options") else "inherited",
+                "project_declarations": defaults.project_declarations if not binding else "",
                 "defaults_versions": {
                     "user": defaults.user_version,
                     "workspace": defaults.workspace_version,
                 },
                 "model_selection_source": defaults.model_source,
+                **(
+                    {
+                        "allowed_tools": binding.snapshot["allowed_tools"],
+                        "tool_names": binding.snapshot["allowed_tools"],
+                        "public_instructions": binding.snapshot.get("instructions", ""),
+                    }
+                    if binding
+                    else {}
+                ),
             },
         )
         run.root_run_id = run.id

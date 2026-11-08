@@ -39,6 +39,8 @@ REQ07 的持久日志执行机制；`start_command` 与 `exec_command` 已统一
 
 普通`exec_command`继续等待真实结束，结果契约保持；预计耗时或需要即时句柄时使用现有`start_command`，同一`command_id`通过`read_command_output`按`next_offset`继续读取、`stop_command`停止。`eof`仅表示当前日志尾，必须看嵌套`command.owned_resources_closed`、状态及退出码确认结束；活动命令的合法等待不计作重复无效调用。任务收尾仍会停止尚未结束的命令，不承诺跨任务后台常驻。
 
+`exec_command`超时且原生回执严格确认`owned_resources_closed=true`时，工具返回`command_timed_out`失败及保留的输出，模型可先核对部分结果，再调整方案继续当前对话。Operation记为`failed/needs_reconciliation`，原生命令仍为`timed_out`；资源回收不代表业务副作用已核实。同一操作重放复用该失败结果，不重发命令；新调用仍经过原审批和预算。未确认资源关闭、执行状态未知或外层watchdog超时继续保护性暂停，不自动放行。失败观察继续受既有无进展与重复调用保护约束。
+
 ### 交互终端
 
 `start_command(interactive=true)`在同一原生supervisor内创建Linux PTY，固定24行×80列，标准错误合并到标准输出；默认false的旧计划保持非交互行为。当前只允许`native_scoped`，不能把PTY入口作为`linux_bwrap`失效时的自动回退，也不因此获得Windows/macOS支持。命令日志、超时、容量和完整资源关闭判断复用原账本。

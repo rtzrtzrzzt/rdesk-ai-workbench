@@ -43,7 +43,10 @@ def estimate(messages, tools):
             {
                 key: value
                 for key, value in {**message, "content": content}.items()
-                if key in {"role", "content", "tool_calls", "tool_call_id", "provider_output"}
+                if key in {
+                    "role", "content", "tool_calls", "tool_call_id", "provider_output",
+                    "reasoning_content",
+                }
             }
         )
     return len(json.dumps(texts + tools, ensure_ascii=False).encode()) // 2 + reserve

@@ -130,6 +130,9 @@ async def main_async():
 
             def queues():
                 with Session(engine()) as db, db.begin():
+                    from workbench.modules.access.service import maintain as maintain_access
+
+                    maintain_access(db)
                     conversation_queue.maintain(db)
                     from workbench.modules.tools.review import maintain as maintain_reviews
 

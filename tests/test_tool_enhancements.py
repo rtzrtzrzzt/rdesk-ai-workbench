@@ -39,7 +39,8 @@ from workbench.modules.tools.task_plan import UpdatePlan
         ),
     ],
 )
-def test_old_calls_keep_exact_recorded_arguments(monkeypatch, name, arguments, recorded):
+@pytest.mark.parametrize("status", ["succeeded", "failed"])
+def test_old_calls_keep_exact_recorded_arguments(monkeypatch, name, arguments, recorded, status):
     run = SimpleNamespace(
         parent_run_id=None,
         cancel_requested_at=None,
@@ -49,7 +50,7 @@ def test_old_calls_keep_exact_recorded_arguments(monkeypatch, name, arguments, r
         id="operation",
         tool_name=name,
         arguments=recorded,
-        status="succeeded",
+        status=status,
         result={"recorded": True},
     )
     db = MagicMock()

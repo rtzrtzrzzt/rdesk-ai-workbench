@@ -18,6 +18,13 @@ from workbench.modules.tools import filesystem
 
 SEARCH_SECONDS = 10
 SEARCH_OUTPUT_BYTES = 24_000
+RUNTIME_DIRECTORIES = frozenset(
+    {".cache", ".config", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+)
+DISCOVERY_NOTE = (
+    "默认跳过运行缓存目录；需要时指定该目录或设置include_runtime=true。"
+    "此选项不放开受保护路径。"
+)
 
 
 class Query(BaseModel):
@@ -30,6 +37,7 @@ class FindFiles(Query):
     case_sensitive: bool = True
     limit: int = Field(default=100, ge=1, le=500)
     cursor: str | None = Field(default=None, max_length=2048)
+    include_runtime: bool = False
 
 
 class SearchFiles(Query):
@@ -42,6 +50,7 @@ class SearchFiles(Query):
     after: int = Field(default=0, ge=0, le=10)
     limit: int = Field(default=50, ge=1, le=200)
     cursor: str | None = Field(default=None, max_length=2048)
+    include_runtime: bool = False
 
 
 class FileRead(Query):
@@ -96,7 +105,12 @@ def matches(path: str, pattern: str, *, case_sensitive=True) -> bool:
 def _key(values):
     return hashlib.sha256(
         json.dumps(
-            {k: v for k, v in values.items() if k not in {"cursor", "limit"}}, sort_keys=True
+            {
+                k: v
+                for k, v in values.items()
+                if k not in {"cursor", "limit"} and not (k == "include_runtime" and v is False)
+            },
+            sort_keys=True,
         ).encode()
     ).hexdigest()[:24]
 
@@ -129,8 +143,13 @@ def _cursor(values, path, line=-1):
     ).decode()
 
 
-def _paths(root: Path, path: Path, after="", *, include_after=False):
+def _includes_runtime(root, path, requested):
+    return requested or any(part in RUNTIME_DIRECTORIES for part in path.relative_to(root).parts)
+
+
+def _paths(root: Path, path: Path, after="", *, include_after=False, include_runtime=False):
     after_parts = PurePosixPath(after).parts if after else ()
+    include_runtime = _includes_runtime(root, path, include_runtime)
 
     def walk(directory, depth=0):
         if depth > 64:
@@ -144,6 +163,10 @@ def _paths(root: Path, path: Path, after="", *, include_after=False):
             relative = candidate.relative_to(root).as_posix()
             parts = PurePosixPath(relative).parts
             if entry.is_dir(follow_symlinks=False):
+                # Discovery defaults are not access policy. An explicit starting
+                # path or include_runtime can inspect these directories normally.
+                if not include_runtime and entry.name in RUNTIME_DIRECTORIES:
+                    continue
                 if after_parts and parts < after_parts and after_parts[: len(parts)] != parts:
                     continue
                 yield from walk(candidate, depth + 1)
@@ -197,9 +220,17 @@ def find_files(root, values):
         raise AppError("file_not_found", "搜索目录不存在。", 404)
     after, _ = _decode(values)
     files, last, started = [], after, time.monotonic()
-    for scanned, (candidate, relative) in enumerate(_paths(root, path, after)):
+    notice = (
+        {} if _includes_runtime(root, path, values["include_runtime"])
+        else {"discovery_note": DISCOVERY_NOTE}
+    )
+    output_bytes = 2
+    for scanned, (candidate, relative) in enumerate(
+        _paths(root, path, after, include_runtime=values["include_runtime"])
+    ):
         if scanned >= 20_000 or time.monotonic() - started > 5:
             return {
+                **notice,
                 "files": files,
                 "truncated": True,
                 "next_cursor": _next_cursor(values, (last, -1), (after, -1)),
@@ -210,11 +241,22 @@ def find_files(root, values):
             values["pattern"],
             case_sensitive=values["case_sensitive"],
         ):
-            if len(files) == values["limit"]:
-                return {"files": files, "truncated": True, "next_cursor": _cursor(values, last)}
+            item_bytes = len(json.dumps(relative, ensure_ascii=False).encode()) + 2
+            if item_bytes + 2 > SEARCH_OUTPUT_BYTES:
+                raise AppError(
+                    "query_path_too_long", "文件路径超出查询输出预算，请缩小搜索范围。", 422
+                )
+            if len(files) == values["limit"] or output_bytes + item_bytes > SEARCH_OUTPUT_BYTES:
+                return {
+                    **notice,
+                    "files": files,
+                    "truncated": True,
+                    "next_cursor": _cursor(values, last),
+                }
             files.append(relative)
+            output_bytes += item_bytes
         last = relative
-    return {"files": files, "truncated": False, "next_cursor": None}
+    return {**notice, "files": files, "truncated": False, "next_cursor": None}
 
 
 def _stdout(results):
@@ -253,7 +295,10 @@ async def search_files(root, values):
     results, last, started = [], original, time.monotonic()
     more, timed_out = False, False
     for scanned, (candidate, relative) in enumerate(
-        _paths(root, path, after_path, include_after=after_line >= 0)
+        _paths(
+            root, path, after_path, include_after=after_line >= 0,
+            include_runtime=values["include_runtime"],
+        )
     ):
         if scanned >= 10_000 or time.monotonic() - started > SEARCH_SECONDS:
             more, timed_out = True, time.monotonic() - started > SEARCH_SECONDS
@@ -370,6 +415,10 @@ async def search_files(root, values):
         last = relative, -1
     cursor = _next_cursor(values, last, original) if more else None
     return {
+        **(
+            {} if _includes_runtime(root, path, values["include_runtime"])
+            else {"discovery_note": DISCOVERY_NOTE}
+        ),
         "matches": results,
         "stdout": _stdout(results),
         "stderr": "",

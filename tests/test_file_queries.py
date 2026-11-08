@@ -98,6 +98,73 @@ def test_invalid_glob_and_cursor_fail_even_for_empty_directory(workspace):
         queries.find_files(workspace, {"cursor": malformed})
 
 
+def test_runtime_discovery_defaults_are_separate_from_path_authority(workspace):
+    for name in (
+        "README.md", ".github/README.md", ".cache/README.md", ".config/README.md",
+        ".config/__pycache__/README.md", ".git/README.md", "data/README.md",
+    ):
+        write(workspace, name)
+    result = filesystem.list_files(workspace, ".")
+    assert result["files"] == [".github/README.md", "README.md"]
+    assert not result["truncated"] and "include_runtime" in result["discovery_note"]
+    included = queries.find_files(workspace, {"include_runtime": True})
+    assert ".cache/README.md" in included["files"]
+    assert ".config/__pycache__/README.md" in included["files"]
+    assert ".git/README.md" not in included["files"] and "data/README.md" not in included["files"]
+    assert queries.find_files(workspace, {"path": ".config"})["files"] == [
+        ".config/README.md", ".config/__pycache__/README.md"
+    ]
+    assert queries.find_files(workspace, {"path": ".cache/README.md"})["files"] == [
+        ".cache/README.md"
+    ]
+    assert filesystem.read_file(workspace, {"path": ".cache/README.md"})["content"].startswith(
+        "1: " + TITLE
+    )
+    with pytest.raises(AppError):
+        queries.find_files(workspace, {"path": ".git", "include_runtime": True})
+
+
+def test_runtime_search_is_opt_in_and_legacy_cursor_remains_bound_to_scope(workspace):
+    write(workspace, "a.md")
+    write(workspace, "b.md")
+    write(workspace, ".cache/README.md")
+    values = queries.FindFiles(limit=1).model_dump()
+    values["_root"] = str(workspace.resolve())
+    legacy = {key: value for key, value in values.items() if key != "include_runtime"}
+    assert queries._key(legacy) == queries._key(values)
+    cursor = queries._cursor(legacy, "a.md")
+    assert queries.find_files(workspace, {"cursor": cursor})["files"] == ["b.md"]
+    with pytest.raises(AppError):
+        queries.find_files(workspace, {"cursor": cursor, "include_runtime": True})
+
+    async def check():
+        default = await queries.search_files(workspace, {"query": TITLE})
+        assert all(not row["path"].startswith(".cache/") for row in default["matches"])
+        explicit = await queries.search_files(workspace, {"query": TITLE, "path": ".cache"})
+        included = await queries.search_files(workspace, {"query": TITLE, "include_runtime": True})
+        assert explicit["matches"][0]["path"] == ".cache/README.md"
+        assert any(row["path"] == ".cache/README.md" for row in included["matches"])
+
+    asyncio.run(check())
+
+
+def test_filename_byte_budget_pages_without_omitting_the_next_match(workspace):
+    names = [f"{'d' * 120}/file-{index:03}-{'n' * 120}.md" for index in range(110)]
+    for name in names:
+        write(workspace, name, TITLE)
+    seen, values = [], {"limit": 500}
+    while True:
+        result = queries.find_files(workspace, values)
+        assert len(json.dumps(result, ensure_ascii=False).encode()) < filesystem.MAX_OUTPUT_BYTES
+        seen.extend(result["files"])
+        if not result["next_cursor"]:
+            assert not result["truncated"]
+            break
+        assert result["files"] and result["truncated"]
+        values["cursor"] = result["next_cursor"]
+    assert seen == names
+
+
 def test_real_rg_over_twenty_matches_page_with_complete_adjacent_context(workspace):
     write(workspace, "README.md", (TITLE + "\n") * 65)
 

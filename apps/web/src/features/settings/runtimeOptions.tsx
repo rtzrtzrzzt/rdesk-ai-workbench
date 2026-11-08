@@ -26,6 +26,21 @@ export const runOptionFields: {
   },
   { key: 'child_agent_limit', label: '子 Agent 名额上限', min: 0, max: 3, integer: true },
   { key: 'checkpoint_rounds', label: '阶段检查点模型轮数', min: 1, max: 128, integer: true },
+  {
+    key: 'model_output_tokens',
+    label: '常规每轮最大输出 token（含思考）',
+    min: 256,
+    max: 1048576,
+    integer: true,
+  },
+  {
+    key: 'model_output_recovery_tokens',
+    label: '输出到顶后的单次恢复 token（0 关闭）',
+    min: 0,
+    max: 8192,
+    integer: true,
+  },
+  { key: 'finish_reserve_seconds', label: '截止前收尾预留秒数', min: 0, max: 3600, integer: true },
   { key: 'max_model_rounds', label: '单任务模型轮数预算', min: 1, max: 65536, integer: true },
   {
     key: 'root_model_attempt_limit',
@@ -118,6 +133,7 @@ export function sourceLabel(source: string | undefined) {
   if (source === 'user') return '用户默认'
   if (source === 'workspace') return '工作区默认'
   if (source === 'task') return '本次任务'
+  if (source === 'project:.rdesk/config.json') return '项目 .rdesk/config.json'
   if (source === 'unconfigured') return '未配置'
   if (/^user:\d+$/.test(source)) return `用户默认 · 版本 ${source.slice(5)}`
   if (/^workspace:\d+$/.test(source)) return `工作区默认 · 版本 ${source.slice(10)}`
@@ -152,6 +168,8 @@ export function RunOptionsFields({
         <summary>高级任务预算与执行设置</summary>
         <p className="page-note">
           普通命令和长命令共用时间预算；AI 可为单次操作选择更短时限。修改对新任务生效。
+          每轮输出额度独立于上下文容量；思考占用同一额度。收尾预留仅对设置了截止时间的任务生效。
+          输出到顶后可使用另行配置的一次恢复额度；设为 0 关闭，不延长截止时间或总调用预算。
         </p>
         <ReviewEffortSelect
           value={value.review_reasoning_effort}

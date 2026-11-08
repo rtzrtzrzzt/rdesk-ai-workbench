@@ -1,0 +1,69 @@
+name: Publish source release
+
+on: create
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.ref_type == 'branch' && startsWith(github.event.ref, 'release/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Check the release version
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import tomllib
+
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          assert re.fullmatch(r'\d+\.\d+\.\d+', version), 'Invalid release version'
+          assert os.environ['GITHUB_REF_NAME'] == f'release/{version}', 'Branch/version mismatch'
+          assert json.loads(Path('apps/web/package.json').read_text())['version'] == version
+          assert json.loads(Path('apps/web/openapi.json').read_text())['info']['version'] == version
+          assert Path(f'docs/releases/{version}.md').is_file(), 'Missing release notes'
+          PY
+      - name: Build the frontend from the lockfile
+        working-directory: apps/web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Build and validate the source package
+        run: python scripts/release/package.py build > "$RUNNER_TEMP/release-build.json"
+      - name: Publish the validated package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import tomllib
+
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          report = json.loads((Path(os.environ['RUNNER_TEMP']) / 'release-build.json').read_text())
+          directory = Path(report['directory'])
+          archive = directory / report['archive']
+          subprocess.run(['python', 'scripts/release/package.py', 'validate', str(archive),
+                          '--sha256', report['sha256']], check=True)
+          subprocess.run(['gh', 'release', 'create', f'v{version}', str(archive),
+                          str(archive) + '.sha256', str(directory / 'BUILD-REPORT.json'),
+                          '--repo', os.environ['GITHUB_REPOSITORY'],
+                          '--target', os.environ['GITHUB_SHA'], '--title', f'RDesk {version}',
+                          '--notes-file', f'docs/releases/{version}.md', '--latest'], check=True)
+          PY

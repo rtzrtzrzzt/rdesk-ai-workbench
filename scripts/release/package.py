@@ -131,7 +131,7 @@ def allowed(name):
 def distributable(name):
     if not allowed(name):
         return False
-    if name in REQUIRED or name in {"README.md", SBOM}:
+    if name in REQUIRED or name in {"README.md", "README.zh-CN.md", SBOM}:
         return True
     if name.startswith("THIRD_PARTY_LICENSES/npm/"):
         return bool(
@@ -146,8 +146,9 @@ def distributable(name):
 
 def sources():
     paths = set(REQUIRED)
-    if (ROOT / "README.md").is_file():
-        paths.add("README.md")
+    for name in ("README.md", "README.zh-CN.md"):
+        if (ROOT / name).is_file():
+            paths.add(name)
     for directory, extensions in TREES.items():
         base = ROOT / directory
         if not base.is_dir():

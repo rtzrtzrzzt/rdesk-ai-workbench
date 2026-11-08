@@ -47,6 +47,11 @@ def for_run(db, run):
             ]
         )
     permitted = set(run.config_snapshot.get("allowed_tools", TOOLS))
+    from workbench.modules.access.service import scope_for_run
+
+    scope = scope_for_run(db, run)
+    if scope:
+        permitted &= scope.allowed_tools
     selected = set(selected) & permitted & set(TOOLS)
     connection = get_connection(db, run.user_id, run.workspace_id)
     if not connection or not connection.enabled:

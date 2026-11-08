@@ -30,6 +30,10 @@
 
 2026-10-20命令并发与停止增量：`exec_command`和`start_command`共享整机准入，限额由应用配置控制。满额在准入事务外核对一次真实关闭回执，仍满额时反馈`command_capacity`及当前任务占位、统计、处理指引和`not_started=true`，不隐式排队或自动重发。配置与资源判据见[命令模块](../../apps/server/src/workbench/modules/processes/README.md)。用户取消后，若剩余命令均为有效终态unknown且执行器已退出、无其他活动资源，则以`failed/resource_cleanup_unconfirmed`结束对话执行，明确显示资源待核对；未知命令仍保留账本与名额、继续独立对账并阻止数据删除。这不代表资源已关闭，不放开运行中或身份核验失败的资源。
 
+2026-10-28命令超时续办增量：`exec_command`只有在原生回执确认全部受管资源关闭后，才将超时作为`command_timed_out`工具失败返回模型，并保留日志、命令ID和核对后换方案的提示，不再因此中断整个Run。Operation为`failed/needs_reconciliation`，区分已确认的执行失败与仍需核对的业务效果；同一操作重放读取原结果，不重新执行。未闭合资源、真实未知执行与外层watchdog超时仍暂停，现有审批、时限、防循环及停止边界保留。本增量不自动迁移或续发此前已暂停、取消的任务。
+
+2026-10-28文件发现增量：三种文件发现/搜索工具共用遍历层的默认运行目录过滤，不改变`authorized_path`权限集合。`.cache/.config/__pycache__/.pytest_cache/.ruff_cache/.mypy_cache`默认不递归，显式起始路径或`include_runtime=true`可查询；受保护目录和符号链接仍拒绝。返回`discovery_note`说明筛选范围，列表按24KB文件名字节预算分页；筛选不冒充`truncated`，默认false保持旧游标摘要兼容，改为true则必须重新查询。
+
 ## 目录
 
 1. [定位与术语](#1-定位与术语)

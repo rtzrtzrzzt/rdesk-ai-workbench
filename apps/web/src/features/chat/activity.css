@@ -139,6 +139,103 @@ div.tool-activity-heading {
   color: var(--muted);
   font-size: 12px;
 }
+.run-process {
+  margin: 12px 0 18px;
+}
+.run-process-heading,
+.run-changes > button,
+.run-change-file > button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 12px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.run-changes > button:hover,
+.run-change-file > button:hover {
+  background: var(--hover);
+}
+.run-process-heading {
+  padding: 7px 0;
+}
+.run-process-heading:hover {
+  color: var(--fg);
+}
+.run-process-heading > span {
+  color: var(--fg);
+}
+.run-process-heading > small {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.run-process .expanded,
+.run-changes .expanded {
+  transform: rotate(90deg);
+}
+.run-changes {
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.run-changes > button > svg:last-child {
+  margin-left: auto;
+}
+.run-changes-content {
+  border-top: 1px solid var(--border);
+  padding: 0 12px 8px;
+}
+.run-changes-content > .page-note {
+  padding: 10px 0;
+  overflow-wrap: anywhere;
+}
+.run-change-file + .run-change-file {
+  border-top: 1px solid var(--border);
+}
+.run-change-file > button {
+  padding: 11px 0;
+}
+.run-change-file > button > svg {
+  flex-shrink: 0;
+}
+.run-change-path {
+  color: var(--fg);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.run-change-counts {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.run-change-content {
+  padding: 0 0 10px;
+}
+.run-change-diff {
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  tab-size: 4;
+}
+.diff-added {
+  color: var(--success, #30804e);
+}
+.diff-removed {
+  color: var(--danger);
+}
+.diff-hunk {
+  color: var(--accent);
+}
 .message-thinking {
   margin-bottom: 12px;
   color: var(--muted);
@@ -321,6 +418,11 @@ div.tool-activity-heading {
   }
 }
 @media (max-width: 600px) {
+  .run-process-heading,
+  .run-changes > button,
+  .run-change-file > button {
+    flex-wrap: wrap;
+  }
   .tool-activity {
     margin-left: 0;
   }

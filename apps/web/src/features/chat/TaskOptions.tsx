@@ -44,8 +44,9 @@ export function TaskOptions({
         <Dialog title="本次任务设置" onClose={() => setOpen(false)}>
           <div className="task-options">
             <p className="page-note">
-              按系统 → 用户 → 工作区 → 本次任务继承。只在创建新任务时冻结，不改变执行中任务。子
-              Agent 最多 3 个；模型生成槽独立
+              按系统 → 用户 → 项目配置 → 工作区 →
+              本次任务继承。只在创建新任务时冻结，不改变执行中任务。子 Agent 最多 3
+              个；模型生成槽独立
               {user.data?.model_generation_capacity === 1 ? '，当前为 1 个' : ''}。
             </p>
             <label className="task-option-mode">

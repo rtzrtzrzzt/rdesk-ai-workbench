@@ -1,6 +1,7 @@
 """Interrupt only unfinished generation; committed tools keep their own lifecycle."""
 
 import asyncio
+import time
 
 from sqlalchemy.orm import Session
 
@@ -27,9 +28,22 @@ def input_arrived(run_id, included):
 
 
 async def events(config, messages, tools, run_id, included):
+    from workbench.modules.access.service import authorize_run_model
+
+    def authorize():
+        with Session(engine()) as db:
+            authorize_run_model(db, db.get(Run, run_id))
+
+    await asyncio.to_thread(authorize)
+    budget = getattr(config, "generation_budget", None)
+    finish_after = budget.working_seconds if budget else None
+    started = time.monotonic()
+
     async def watch():
         while True:
             await asyncio.sleep(0.25)
+            if finish_after is not None and time.monotonic() - started >= finish_after:
+                return "generation_finishing"
             reason = await asyncio.to_thread(input_arrived, run_id, included)
             if reason:
                 return reason
@@ -46,7 +60,12 @@ async def events(config, messages, tools, run_id, included):
                 # A scoped SGLang abort stops GPU decoding promptly; closing the
                 # HTTP stream is the portable fallback for other providers.
                 await abort_generation(config)
-                raise AppError(reason, "已收到新要求，正在调整当前回复。", kind="steering")
+                message = (
+                    "已进入截止前收尾阶段，正在保留现有结果。"
+                    if reason == "generation_finishing"
+                    else "已收到新要求，正在调整当前回复。"
+                )
+                raise AppError(reason, message, kind="steering")
             try:
                 yield pending.result()
             except StopAsyncIteration:

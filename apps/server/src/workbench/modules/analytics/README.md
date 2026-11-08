@@ -26,6 +26,8 @@
 
 接收标准化字段，不对 raw 提供方对象再猜口径。整数范围0..2^63−1，时间范围0..2^53−1 ms；错误类型、布尔、负数、非整数 token、超范围字段均未知，不转成0。普通输入已包括标准化的缓存子项，不将 input+cache 再加；reasoning 若已含在 output 内也不再次相加。
 
+2026-10-28起，模型适配器对严格匹配受管清单且通过非生成元数据验证的SGLang0.5.21完整流，按已审协议将“无缓存明细”归一为零，来源标记为`sglang.0.5.21.zero_without_details`。真实缓存细项优先，非法细项不转零；取消、中断、未知版本和外部兼容端点继续保持未知。该处理发生在采集层，汇总仍只接收标准化计数；旧记录不批量补零，修复后百分比下降可能只是零命中开始纳入分母。
+
 缓存共同观测集合要求 input/read 都已知且 read<=input。`observed_input_tokens`、`observed_read_tokens` 是该集合之和；无集合为 null。`token_hit_ratio=sum(read)/sum(input)`，分母0为null，禁止无权平均逐请求比例。`request_hit_ratio=read>0 的请求数/共同可知请求数`，共同已知而全部 read=0 时为0。`coverage_ratio=共同可知请求数/所有尝试数`；`inconsistent_attempts` 给出 read>input 的真实异常数，这些不参与命中计算。缓存写独立统计，不算命中。
 
 `known_input_token_coverage_ratio=共同集合输入量/所有已知输入量`，只描述已知 token 的覆盖，不代表输入未知请求的真实总量。没有足够分母时null。

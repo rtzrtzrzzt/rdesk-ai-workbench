@@ -1413,6 +1413,22 @@ export function App() {
                       workspaceId={workspaceId}
                       messages={displayMessages}
                       runs={orderedRuns}
+                      renderReasoning={(message) => {
+                        const text = reasoning[message.id] ?? message.reasoning ?? ''
+                        return text.trim() ? (
+                          <Thinking
+                            text={text}
+                            active={
+                              message.status === 'streaming' &&
+                              !(streaming[message.id] ?? message.content).trim() &&
+                              orderedRuns.some(
+                                (run) => run.id === message.run_id && run.status === 'running',
+                              )
+                            }
+                            workspaceId={workspaceId}
+                          />
+                        ) : null
+                      }}
                       renderMessage={(message) =>
                         shouldRenderMessage(
                           message,
@@ -1430,17 +1446,6 @@ export function App() {
                             ) : null}
                             <div className="message-body">
                               <MessageAttachments message={message} workspaceId={workspaceId} />
-                              <Thinking
-                                text={reasoning[message.id] ?? message.reasoning ?? ''}
-                                active={
-                                  message.status === 'streaming' &&
-                                  !(streaming[message.id] ?? message.content).trim() &&
-                                  orderedRuns.some(
-                                    (run) => run.id === message.run_id && run.status === 'running',
-                                  )
-                                }
-                                workspaceId={workspaceId}
-                              />
                               <MessageContent
                                 workspaceId={workspaceId}
                                 role={message.role}

@@ -1,6 +1,6 @@
 # 本机 Flash-Next 模型部署
 
-只使用本机既有 NVIDIA 权重，固定修订见 `deployment.json`。当前物理目录为 `models/nvidia/Qwen3.8-Flash-Next-NVFP4`，服务模型别名为 `Qwen3.8-Flash-Next`；上下文131072、MTP开启、模型推理并发1。本页针对当前 Spark 项目部署；通用源码发行包刻意不携带这份主机专属配置和验证证据，使用模型辅助脚本前须另行准备匹配的本机配置/环境，不能直接把其他机器的 verified 标记当成自己的验收结果。独立虚拟环境位于 `.runtime/model-env`，权重保持原目录；PLE backing、编译缓存、日志与真实结果存放在 `.local/model`。不自动下载模型、切换模型或连接外部 API；MTP 仅由部署清单的显式布尔值开启。
+只使用本机既有 NVIDIA 权重，固定修订见 `deployment.json`。当前物理目录为 `models/nvidia/Qwen3.8-Flash-Next-NVFP4`，服务模型别名为 `Qwen3.8-Flash-Next`；上下文131072、MTP开启、模型推理并发1。本页针对当前 Spark 项目部署；Git和通用源码发行包均不携带这份主机专属配置和验证证据；本地既有文件仍保留，使用模型辅助脚本前须另行准备匹配的本机配置/环境，不能直接把其他机器的 verified 标记当成自己的验收结果。独立虚拟环境位于 `.runtime/model-env`，权重保持原目录；PLE backing、编译缓存、日志与真实结果存放在 `.local/model`。不自动下载模型、切换模型或连接外部 API；MTP 仅由部署清单的显式布尔值开启。
 
 官方 SGLang `v0.5.21` 的确切提交为 `e00930c5489053f26d86b179cee0d087f846acbb`。其 `qwen4_exp.py` 从 NVIDIA MIXED_PRECISION 配置识别 FP8 PLE；`qwen4_exp_ple_table.py` 提供 `file` backend，明确面向 GB10 UMA。主机 CUDA 13.0.3；约束将 NVCC、NVRTC、CUDA 绑定固定在 13.0，其他 NVIDIA 组件按实际依赖锁记录，不把所有组件版本统称为 13.0。安装完成后生成本环境的 `requirements.lock`，实际已安装包证据见 `.local/model/evidence/environment-packages.json`，pip安装来源报告见 `installed-packages.json`。文件存在和安装成功均不代表模型真实验收通过。
 

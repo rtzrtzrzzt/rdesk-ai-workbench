@@ -263,6 +263,9 @@ def start(open_browser: bool) -> None:
             trust_env=False, timeout=1, verify=_http_verification(settings)
         ) as client:
             if _healthy_owned(state, client, settings, url):
+                from workbench.modules.access.listener import ensure_optional
+
+                ensure_optional(state)
                 print(f"已复用当前 AI 工作台：{url}")
                 if open_browser:
                     webbrowser.open(url)
@@ -312,6 +315,9 @@ def start(open_browser: bool) -> None:
                         pass
                 state[component] = launch_component(component)
                 write_state(state)
+            from workbench.modules.access.listener import ensure_optional
+
+            ensure_optional(state)
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
                 if _healthy_owned(state, client, settings, url):
@@ -331,6 +337,7 @@ def stop(*, force=False) -> None:
         state = read_state()
         failures = []
         components = (
+            "public-api",
             "api",
             "worker",
             "file-worker",
@@ -402,6 +409,7 @@ def main() -> None:
             "recover-account",
             "migrate",
             "api",
+            "public-api",
             "worker",
             "file-worker",
             "media-worker",
@@ -437,6 +445,8 @@ def main() -> None:
 
         configure()
     elif args.command in {"status", "doctor"}:
+        from workbench.modules.access.listener import view as listener_view
+
         state = read_state()
         print(
             json.dumps(
@@ -453,11 +463,16 @@ def main() -> None:
                         for key, value in state.items()
                     },
                     "url": _url(get_settings()),
+                    "public_listener": listener_view(state),
                 },
                 ensure_ascii=False,
                 indent=2,
             )
         )
+    elif args.command == "public-api":
+        from workbench.modules.access.listener import run as public_api_main
+
+        public_api_main()
     elif args.command == "api":
         import uvicorn
 

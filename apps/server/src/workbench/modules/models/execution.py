@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from dataclasses import replace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,6 +24,29 @@ from workbench.modules.tools.registry import definitions
 from workbench.modules.usage import UsageRecord
 
 MAX_AUTOMATIC_CONTINUATIONS = 16
+
+
+def continued_output(db, run_id, round_number, *, recovering=False):
+    """Provider continuation consumes the same round budget, never a new one."""
+    metrics = db.scalars(
+        select(UsageRecord.metrics)
+        .join(Attempt, Attempt.id == UsageRecord.attempt_id)
+        .join(Step, Step.id == Attempt.step_id)
+        .where(
+            Attempt.run_id == run_id,
+            Step.logical_key == f"model:{round_number}",
+            Attempt.error["auto_continued"].as_boolean().is_(True),
+        )
+    )
+    total = 0
+    for item in metrics:
+        if bool(item.get("output_recovery")) != recovering:
+            continue
+        value = item.get("output_tokens_total")
+        if not isinstance(value, int) or value < 0:
+            return None
+        total += value
+    return total
 
 
 def begin_attempt(
@@ -76,7 +100,9 @@ def begin_attempt(
         counted = sum(
             not (item.error or {}).get("auto_continued")
             and not (item.error or {}).get("auto_corrected")
-            and (item.error or {}).get("code") not in {"generation_steered", "generation_yielded"}
+            and not (item.error or {}).get("output_recovery_started")
+            and (item.error or {}).get("code")
+            not in {"generation_steered", "generation_yielded", "generation_finishing"}
             for item in attempts
         )
         if counted >= attempt_limit:
@@ -196,6 +222,7 @@ def finish_attempt(
         superseded = error is not None and error.code in {
             "generation_steered",
             "generation_yielded",
+            "generation_finishing",
         }
         attempt.finished_at = now()
         attempt.status = "succeeded" if error is None else "superseded" if superseded else "failed"
@@ -211,12 +238,15 @@ def finish_attempt(
         message.status = (
             "completed" if error is None else "superseded" if superseded else "interrupted"
         )
+        if error is None and assistant and isinstance(assistant.get("_native_replay"), dict):
+            assistant["_native_replay"]["reasoning"] = message.reasoning
         message.provider_message = None if superseded else assistant
         step = db.get(Step, attempt.step_id)
         if not error:
             step.status = "succeeded"
             guard = dict(run.config_snapshot.get("safety", {}))
             guard.pop("continue_partial_output", None)
+            guard.pop("output_recovery", None)
             run.config_snapshot = {**run.config_snapshot, "safety": guard}
             from workbench.modules.collaboration.inbox import mark_delivered
 
@@ -273,6 +303,9 @@ def configuration(
     with Session(engine()) as db, db.begin():
         run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
         model = db.get(ModelConnection, run.model_connection_id)
+        from workbench.modules.access.service import authorize_run_model
+
+        authorize_run_model(db, run)
         revision = (
             db.get(ModelRevision, run.config_snapshot.get("model_revision_id"))
             if run.config_snapshot.get("model_revision_id")
@@ -300,10 +333,25 @@ def configuration(
             **frozen["generation"],
             **run.config_snapshot.get("generation_overrides", {}),
         }
+        from workbench.modules.runs.budget import generation_budget
+
+        budget = generation_budget(run, round_number)
+        spent = continued_output(db, run_id, round_number, recovering=budget.recovering)
+        if spent is None:
+            raise AppError(
+                "generation_usage_unknown", "此前续生成的用量未知，请核对后继续。", 409, "pause"
+            )
+        budget = replace(budget, output_tokens=budget.output_tokens - spent)
+        if budget.output_tokens < 64:
+            raise AppError(
+                "model_output_limit", "本轮生成预算已用尽，已保留部分结果。", 422, "budget"
+            )
         output_limit = run.config_snapshot.get("max_output_tokens", 2048)
         automatic_output = output_limit is None
         output_reserve = (
-            min(8192, frozen["context_window"] // 4) if automatic_output else output_limit
+            min(budget.output_tokens, frozen["context_window"] // 4)
+            if automatic_output
+            else min(output_limit, budget.output_tokens)
         )
         config = ProviderConfig(
             provider_type=frozen["provider_type"],
@@ -312,7 +360,7 @@ def configuration(
             credential_ciphertext=revision.encrypted_api_key,
             max_output_tokens=output_reserve,
             context_window=frozen["context_window"],
-            timeout_seconds=generation["timeout_seconds"],
+            timeout_seconds=budget.timeout(generation["timeout_seconds"]),
             temperature=generation["temperature"],
             cache_observation=generation.get("cache_observation", "standard"),
             engine_kind=generation.get("engine_kind", "auto"),
@@ -321,6 +369,7 @@ def configuration(
             reasoning_adapter=generation.get("reasoning_adapter", "auto"),
             native_reasoning_efforts=tuple(generation.get("native_reasoning_efforts", [])),
             prompt_template=generation.get("prompt_template"),
+            run_id=run.id,
         )
         from workbench.modules.tools.selection import for_run as selected_tools
 
@@ -338,8 +387,10 @@ def configuration(
             "enabled", True
         ):
             tools = []
+        if budget.finishing:
+            tools = []
         continue_output = run.config_snapshot.get("safety", {}).get("continue_partial_output")
-        partial_codes = ["generation_steered", "generation_yielded"] + (
+        partial_codes = ["generation_steered", "generation_yielded", "generation_finishing"] + (
             ["model_output_limit"] if continue_output else []
         )
         if partial_codes:
@@ -359,7 +410,7 @@ def configuration(
             for partial in partials:
                 if partial.content.strip():
                     messages += [{"role": "assistant", "content": partial.content}]
-            if partials:
+            if partials and not budget.recovering:
                 messages += [
                     {
                         "role": "user",
@@ -402,17 +453,28 @@ def configuration(
         from workbench.modules.context.window import apply_window
 
         messages = apply_window(db, run, messages)
+        # Rebuilt from the current clock rather than checkpointed as a new
+        # user request. The stable system/tool prefix remains cacheable.
+        budget_notice = budget.notice(run.id)
+        messages = messages + [budget_notice]
+        # Preserve the exact observation used for this response in the graph.
+        # Later tool rounds can then verify the same causal prefix and replay
+        # native reasoning, rather than treating a clock update as a new user turn.
+        config.continuation_messages = [
+            *getattr(config, "continuation_messages", []),
+            budget_notice,
+        ]
         messages, native_reserve = compile_inputs(db, run, messages, frozen)
         config.native_reserve = native_reserve
         config.automatic_output = automatic_output
+        config.generation_budget = budget
         config.context_trigger_ratio = run.config_snapshot.get("runtime_options", {}).get(
             "context_target_ratio", 0.9
         )
         if automatic_output and not planning:
-            # estimate() is a conservative input estimate, not measured token
-            # usage. Keep room for provider framing without a separate small cap.
-            config.max_output_tokens = (
-                frozen["context_window"] - estimate(messages, tools) - native_reserve - 256
+            config.max_output_tokens = min(
+                budget.output_tokens,
+                frozen["context_window"] - estimate(messages, tools) - native_reserve - 256,
             )
             if config.max_output_tokens < 64:
                 raise AppError(
@@ -438,21 +500,27 @@ async def prepare_configuration(run_id, source_messages, round_number):
     """Count and summarize outside database locks, then recheck the live boundary."""
     from workbench.modules.context.service import compact_if_needed, record_input
     from workbench.modules.models.engine_adapters import count_input_tokens
+    from workbench.modules.models.managed import verified_contract
+    from workbench.modules.models.providers import prepare_chat_replay
 
     config, tools, messages, _ = await asyncio.to_thread(
         configuration, run_id, source_messages, round_number, planning=True
     )
+    config.local_contract = await asyncio.to_thread(verified_contract, config)
+    messages = prepare_chat_replay(config, messages, tools)
     count, source = await asyncio.to_thread(count_input_tokens, config, messages, tools)
     if await compact_if_needed(run_id, config, messages, tools, config.context_window, count):
         config, tools, messages, _ = await asyncio.to_thread(
             configuration, run_id, source_messages, round_number, planning=True
         )
+        config.local_contract = await asyncio.to_thread(verified_contract, config)
+        messages = prepare_chat_replay(config, messages, tools)
         count, source = await asyncio.to_thread(count_input_tokens, config, messages, tools)
     # Automatic output uses the actual rendered input when the engine can count
     # it. The fallback is explicitly estimated and retains media reserves.
     remaining = config.context_window - count - getattr(config, "native_reserve", 0) - 256
     if config.automatic_output:
-        config.max_output_tokens = remaining
+        config.max_output_tokens = min(config.generation_budget.output_tokens, remaining)
     if config.max_output_tokens < 64 or config.max_output_tokens > remaining:
         raise AppError(
             "context_budget", "当前上下文没有足够生成空间，请压缩历史后继续。", 422, "pause"
@@ -522,7 +590,7 @@ async def generate(run_id: str, messages: list[dict], round_number: int) -> dict
                     try:
                         return await generate_permitted(run_id, messages, round_number)
                     except AppError as error:
-                        if error.code != "generation_steered":
+                        if error.code not in {"generation_steered", "generation_finishing"}:
                             raise
                         # User steering keeps this generation slot so the
                         # updated request need not wait behind long child turns.
@@ -566,21 +634,61 @@ def prepare_continuation(run_id: str, round_number: int) -> bool:
         if (
             (latest.error or {}).get("code") != "model_output_limit"
             or not message
-            or not message.content.strip()
             or not usage
             or usage.metrics.get("partial_tool_calls")
         ):
+            return False
+        used = usage.metrics.get("output_tokens_total")
+        if (
+            not isinstance(used, int) or used <= 0
+            or not (message.content.strip() or message.reasoning.strip())
+        ):
+            return False
+        from workbench.modules.runs.budget import generation_budget
+
+        budget = generation_budget(run, round_number)
+        spent = continued_output(db, run_id, round_number, recovering=budget.recovering)
+        if spent is None:
             return False
         previous = [db.get(Message, item.message_id) for item in attempts[:-1]]
         if len(message.content.strip()) >= 80 and any(
             item and message.content.strip() in item.content for item in previous
         ):
             return False
-        latest.error = {**latest.error, "auto_continued": True}
+        within_round = bool(message.content.strip()) and spent + used < budget.output_tokens - 64
+        guard = dict(run.config_snapshot.get("safety", {}))
+        if not within_round:
+            # A separate, explicit allowance buys one recovery per Run. It does
+            # not reset the regular round cap, deadline or root attempt budget.
+            recovery_tokens = run.config_snapshot.get("runtime_options", {}).get(
+                "model_output_recovery_tokens", 0
+            )
+            if (
+                recovery_tokens < 64
+                or guard.get("output_recovery_used")
+                or budget.recovering
+                or budget.remaining_rounds < 1
+                or (budget.remaining_seconds is not None and budget.remaining_seconds < 1)
+            ):
+                return False
+            from workbench.modules.collaboration.service import budget_check
+
+            budget_check(db, run)
+            guard["output_recovery_used"] = True
+            guard["output_recovery"] = {
+                "round_number": round_number,
+                "tokens": recovery_tokens,
+                "after_attempt_id": latest.id,
+            }
+            latest.error = {**latest.error, "output_recovery_started": True}
+            event = "run.output_recovery_started"
+        else:
+            latest.error = {**latest.error, "auto_continued": True}
+            event = "run.output_continuing"
         message.status = "continued"
-        guard = {**run.config_snapshot.get("safety", {}), "continue_partial_output": True}
+        guard["continue_partial_output"] = True
         run.config_snapshot = {**run.config_snapshot, "safety": guard}
-        emit(db, run_id, "run.output_continuing", {"message_id": message.id})
+        emit(db, run_id, event, {"message_id": message.id})
         return True
 
 
@@ -621,6 +729,9 @@ async def generate_permitted(run_id, source_messages, round_number):
             "usage_known": False,
             "started_at": now().isoformat(),
             "requested_output_tokens": config.max_output_tokens,
+            "budget_phase": "finishing" if config.generation_budget.finishing else "working",
+            "output_recovery": config.generation_budget.recovering,
+            "remaining_seconds": config.generation_budget.remaining_seconds,
         }
         buffer = ""
         flushed = started
@@ -705,6 +816,8 @@ async def generate_permitted(run_id, source_messages, round_number):
                 raise AppError(
                     "model_stream_interrupted", "模型流在完成前断开。", 502, "transient", True
                 )
+            metrics["native_replay_messages"] = config.replay_message_count
+            metrics["native_replay_characters"] = config.replay_characters
             if metrics.get("finish_reason") in {
                 "length",
                 "max_tokens",
@@ -713,7 +826,11 @@ async def generate_permitted(run_id, source_messages, round_number):
             }:
                 raise AppError(
                     "model_output_limit",
-                    "模型达到输出上限，已保留部分结果，请调整生成预算后继续。",
+                    (
+                        "本任务的有限恢复预算已用尽，已保留部分结果，请核对后继续。"
+                        if config.generation_budget.recovering
+                        else "模型达到输出上限，已保留部分结果，请调整生成预算后继续。"
+                    ),
                     422,
                     "budget",
                 )
@@ -747,11 +864,14 @@ async def generate_permitted(run_id, source_messages, round_number):
                         "type": "function",
                         "function": {
                             "name": call["name"],
-                            "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+                            "arguments": call.get("_arguments_json")
+                            or json.dumps(call["arguments"], ensure_ascii=False),
                         },
                     }
                     for call in calls
                 ]
+                if config.replay_context:
+                    assistant["_native_replay"] = {"context": config.replay_context}
             if provider_output:
                 assistant["provider_output"] = provider_output
             metrics["duration_ms"] = round((time.monotonic() - started) * 1000, 2)

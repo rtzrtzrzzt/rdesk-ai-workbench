@@ -2,11 +2,11 @@
 
 本目录配套 `scripts/release/package.py` 和 `scripts/bootstrap.py`。它是包含已构建前端的**原生源码发行包**，不是签名的 Windows/macOS/Linux 二进制安装器。构建/stage 不修改数据库、用户数据、版本入口或现有服务。日常 start 不执行依赖升级或 npm 构建。
 
-当前应用版本为 **1.0.0**。已准备环境的一键启动、进度显示及 `stop.sh` / `stop.ps1` 关闭行为见[一键服务说明](one-click-services.md)。当前源码包构建规则会包含这些入口；本次只同步文档与版本并提交Git，没有构建1.0.0发行包，旧包不代表当前源码。
+当前应用版本为 **1.1.0**。已准备环境的一键启动、进度显示及 `stop.sh` / `stop.ps1` 关闭行为见[一键服务说明](one-click-services.md)。当前发行通过下述打包器生成包含预构建前端、逐文件清单、SBOM和许可材料的源码ZIP，具体构建及校验事实以该包报告为准。版本变化见[1.1.0更新说明](../../docs/releases/1.1.0.md)。
 
 ## 包含与排除
 
-包包含 Python 源码、迁移、pyproject/uv.lock、可重建的前端源码/package-lock、当前真实 `apps/web/dist`、必要脚本、设计/组件来源文档、项目 LICENSE/NOTICE/THIRD_PARTY_NOTICES，以及本机可读取且锁定版本匹配的 npm LICENSE/COPYING/NOTICE。前端产物是已有文件快照，不重写正在试用的 dist，也不声称证明了它与当前所有源码的构建关系。
+包包含中英文README、Python 源码、迁移、pyproject/uv.lock、可重建的前端源码/package-lock、当前真实 `apps/web/dist`、必要脚本、设计/组件来源文档、项目 LICENSE/NOTICE/THIRD_PARTY_NOTICES，以及本机可读取且锁定版本匹配的 npm LICENSE/COPYING/NOTICE。前端产物是已有文件快照，不重写正在试用的 dist，也不声称证明了它与当前所有源码的构建关系。
 
 明确排除根 models 权重、`.local/.runtime/.tools/.venv/node_modules/.git/.agents/.codex`、缓存、用户文件、凭据、运行日志和 Agent 临时记录。注意 `runtime/` 是源码说明，和 `.runtime/` 安装状态不同；`apps/server/.../modules/models` 是必要应用代码，不会因目录名 models 被误删。本机 `runtime/model/deployment.json` 含主机部署/能力证据，故不复制；将已批准基线的少量公开 revision/引擎/体积固定在本目录 external-components.json 作为 external reference，不复制或重新宣称本机已验证能力；构建不依赖读取本机运行状态，这份公开输入也随源码包保留。
 
@@ -22,7 +22,7 @@ python3.12 scripts/release/package.py validate /path/to/release.zip --sha256 <re
 python3.12 scripts/release/package.py stage /path/to/release.zip --sha256 <reviewed-sha256> --destination /path/to/NEW-version-container
 ```
 
-默认产物在 `.local/releases/<release_id>/`，包含 zip、外层 `.sha256` 与 `BUILD-REPORT.json`。从已审阅报告或可信渠道取得 expected SHA256；与包一起被改掉的 checksum 不能证明发行者身份。本轮没有签名/公证/代码签名证书或自动更新服务。
+默认产物在 `.local/releases/<release_id>/`，包含 zip、外层 `.sha256` 与 `BUILD-REPORT.json`。 GitHub上的发布工作流仅在明确创建 `release/<应用版本>` 分支时执行，按锁文件重建前端、调用同一打包器并校验，再为该提交创建 `v<应用版本>` Release及三个附件；普通main更新不会发布或部署。从已审阅报告或可信渠道取得 expected SHA256；与包一起被改掉的 checksum 不能证明发行者身份。本轮没有签名/公证/代码签名证书或自动更新服务。
 
 ZIP 只含一个版本根目录。构建固定文件排序、权限及时间；默认 source epoch=0，ZIP 时间规范化到格式允许的1980年；可显式 `SOURCE_DATE_EPOCH`/`--source-date-epoch`。相同源码/前端/许可输入、epoch 与 Python/zlib 工具组合可重复生成相同字节；不承诺不同 zlib 实现压缩结果一样。版本 ID 同时绑定输入摘要与构建元数据。读取期间及收尾检测到源文件变动即拒绝，不把逐文件捕获当成整个开发工作区的原子快照。
 

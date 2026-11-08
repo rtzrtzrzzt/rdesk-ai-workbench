@@ -182,6 +182,8 @@ AI 调用 `configure_settings` 不自供 `request_id`，系统使用本次 Opera
 | 文件库查询与正文 | `list_artifacts` / `read_artifact`；真实 artifact_id、version 与行/字符续读 |
 | 向用户交付文件 | `present_file` 生成真实可点击链接；不能把服务器私有路径冒充下载链接 |
 
+`list_files`、`find_files`和`search_files`默认跳过`.cache`、`.config`及常见Python工具缓存目录，避免运行数据挤占项目发现结果；`.github`等其他隐藏项目目录仍可发现。需要查询被跳过的目录时，显式指定其`path`，或设置`include_runtime=true`；这不是权限提升，受保护路径和符号链接边界仍有效。文件名列表也有字节预算，`next_cursor`非空时按原条件续读；默认跳过目录本身不表示预算截断。
+
 例如读取某文件第 80 到 120 行：
 
 ```json
@@ -258,6 +260,8 @@ read_conversation({
 `timeout_seconds` 省略或 null 时继承任务预算，显式值只能缩短预算，当前最大界限以 schema 为准。命令时限不是模型请求时限。当前默认每任务 2 条活动命令、整机 4 条；有效上限和实际占位以 `list_commands` 为准，其他任务只公开占用数量。
 
 日志 `offset/next_offset` 以字节计，不能用字符数推算；按返回偏移续读。`eof` 只表示当前日志文件尾；须同时检查实际状态、`owned_resources_closed` 和 `exit_code` 确认结束。状态未知仍占名额，不能删除账本假装释放。`command_capacity` 表示本次没有启动新命令，先复用原命令、读取日志或等待清理，不循环重试启动。
+
+`exec_command`返回`command_timed_out`且`owned_resources_closed=true`时，命令已经超时并停止，对话可继续。先核对保留输出、已有产物和可能的副作用，再换方法推进剩余目标；不把超时当成功、不盲目重复原命令，也不只因单条命令失败就结束任务。资源未确认关闭或执行状态确实未知时，仍按暂停原因核对，不绕过保护。
 
 `stop_command` 和对话停止都是请求回收；返回发出信号不等于资源已关闭，也不撤销已发生的文件或外部业务效果。任务结束会处理遗留活动命令。执行器归属/租约丢失时，使用原记录核对，不手动标成功或直接杀不明进程。
 

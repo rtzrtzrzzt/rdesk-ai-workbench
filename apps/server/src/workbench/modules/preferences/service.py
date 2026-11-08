@@ -65,6 +65,7 @@ class ResolvedDefaults(BaseModel):
     model_source: str
     user_version: int
     workspace_version: int
+    project_declarations: str = ""
 
 
 class WorkspaceDefaultsView(BaseModel):
@@ -85,7 +86,17 @@ class WorkspaceDefaultsSave(Command):
 def resolve(db, user_id, workspace_id, *, task_options=None, task_model=None):
     from workbench.modules.workspace_service import get as workspace
 
-    workspace(db, user_id, workspace_id)
+    project = workspace(db, user_id, workspace_id)
+    from pathlib import Path
+
+    from workbench.modules.project_configuration.service import declarations, load
+
+    project_configuration = load(Path(project.root_path)).configuration
+    project_defaults = (
+        project_configuration.defaults.model_dump(exclude_none=True)
+        if project_configuration
+        else {}
+    )
     user = db.scalar(select(RuntimeDefaults).where(RuntimeDefaults.user_id == user_id))
     row = db.scalar(
         select(WorkspaceRuntimeDefaults).where(
@@ -97,6 +108,7 @@ def resolve(db, user_id, workspace_id, *, task_options=None, task_model=None):
     sources = dict.fromkeys(values, "system")
     for patch, source in (
         (user.options if user else {}, f"user:{user.version if user else 0}"),
+        (project_defaults, "project:.rdesk/config.json"),
         (row.options if row else {}, f"workspace:{row.version if row else 0}"),
         (task_options or {}, "task"),
     ):
@@ -118,6 +130,7 @@ def resolve(db, user_id, workspace_id, *, task_options=None, task_model=None):
         model_source=model_source if model else "unconfigured",
         user_version=user.version if user else 0,
         workspace_version=row.version if row else 0,
+        project_declarations=declarations(project_configuration),
     )
 
 

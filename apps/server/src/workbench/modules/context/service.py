@@ -73,6 +73,25 @@ def latest_agent(db, thread_id, *, active=False):
 
 
 def selected_model(db, user_id, thread, connection_id=None):
+    from workbench.modules.access.domain import ExternalNamespace
+    from workbench.modules.agent_services.domain import AgentSessionBinding
+    from workbench.modules.agent_services.service import runtime_policy
+
+    external = db.scalar(select(ExternalNamespace.id).where(
+        ExternalNamespace.workspace_id == thread.workspace_id
+    ))
+    if external:
+        session = db.scalar(select(AgentSessionBinding).where(
+            AgentSessionBinding.thread_id == thread.id
+        ))
+        namespace = db.get(ExternalNamespace, external)
+        if session is None or session.namespace_id != namespace.id:
+            raise AppError("execution_binding_invalid", "会话授权绑定缺失。", 403, "policy")
+        definition = runtime_policy(db, namespace.service_id, session.revision_id)
+        identifier = str(definition["revision_definition"]["model_connection_id"])
+        if connection_id and str(connection_id) != identifier:
+            raise AppError("api_model_denied", "模型不属于此会话发布版本。", 403, "policy")
+        return models.get(db, user_id, identifier)
     active = latest_agent(db, thread.id, active=True)
     latest = active or latest_agent(db, thread.id)
     identifier = connection_id or (latest.model_connection_id if latest else None)
@@ -85,9 +104,20 @@ def selected_model(db, user_id, thread, connection_id=None):
 
 def _enqueue_idle(db, user_id, thread, model, row):
     revision = models.freeze(db, user_id, model.id)
+    from workbench.modules.access.service import binding_for_thread
     from workbench.modules.preferences.service import resolve
 
-    defaults = resolve(db, user_id, thread.workspace_id, task_model=model.id)
+    binding = binding_for_thread(db, thread)
+    if binding:
+        from types import SimpleNamespace
+
+        from workbench.contracts.requests import RunOptions
+
+        defaults = SimpleNamespace(options=RunOptions.model_validate(
+            binding.snapshot["runtime_options"]
+        ))
+    else:
+        defaults = resolve(db, user_id, thread.workspace_id, task_model=model.id)
     latest = latest_agent(db, thread.id)
     identifier = new_id()
     run = Run(
@@ -100,12 +130,18 @@ def _enqueue_idle(db, user_id, thread, model, row):
         kind="context_compaction",
         status="queued",
         input="压缩当前对话的历史上下文，保留原始消息，不执行对话内任务。",
+        execution_origin="api" if binding else "owner",
+        execution_binding_id=binding.id if binding else None,
         config_snapshot={
             "model_revision_id": revision.id,
             "max_output_tokens": None,
             "runtime_options": defaults.options.model_dump(mode="json"),
             "tool_names": latest.config_snapshot.get("tool_names") if latest else None,
-            "extensions": list(latest.config_snapshot.get("extensions", [])) if latest else [],
+            "extensions": (
+                list(latest.config_snapshot.get("extensions", []))
+                if latest and not binding else []
+            ),
+            **({"allowed_tools": binding.snapshot["allowed_tools"]} if binding else {}),
         },
     )
     db.add(run)
@@ -319,6 +355,10 @@ def _plan(run_id, messages, tools, window, before, output_reserve):
 
 
 def _begin_summary(run_id):
+    from workbench.modules.access.service import authorize_run_model
+
+    with Session(engine()) as authority:
+        authorize_run_model(authority, authority.get(Run, run_id))
     with Session(engine()) as db, db.begin():
         run = owned_run(db, run_id)
         if run.cancel_requested_at:
@@ -552,7 +592,9 @@ async def _summarize_batches(run_id, config, messages, included, window):
         if not durable(item) and item.get("source_kind") != "task_state":
             continue
         data = {
-            key: value for key, value in item.items() if key not in {"provider_output", "reasoning"}
+            key: value
+            for key, value in item.items()
+            if key not in {"provider_output", "reasoning", "reasoning_content", "_native_replay"}
         }
         if isinstance(data.get("content"), list):
             data["content"] = "\n".join(

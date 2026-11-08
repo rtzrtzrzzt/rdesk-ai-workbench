@@ -48,6 +48,16 @@ from workbench.modules.usage import UsageRecord
 from workbench.modules.workspaces import Workspace
 
 __all__ = [
+    "ApiClient",
+    "ApiKey",
+    "Grant",
+    "ExecutionBinding",
+    "ExternalNamespace",
+    "AgentService",
+    "AgentServiceRevision",
+    "AgentSessionBinding",
+    "ChangeRecord",
+    "CommandCapture",
     "MediaConnection",
     "MediaTask",
     "MediaResidency",
@@ -103,3 +113,16 @@ __all__ = [
     "Upload",
     "SearchConnection",
 ]
+from workbench.modules.access.domain import (
+    ApiClient,
+    ApiKey,
+    ExecutionBinding,
+    ExternalNamespace,
+    Grant,
+)
+from workbench.modules.agent_services.domain import (
+    AgentService,
+    AgentServiceRevision,
+    AgentSessionBinding,
+)
+from workbench.modules.changes.domain import ChangeRecord, CommandCapture

@@ -231,7 +231,9 @@ def _freeze_files(identifier):
         internal = {
             a.id
             for a in candidates
-            if a.kind in {"task_state", "ui_surface", "command_log", "screenshot"}
+            if a.kind in {
+                "task_state", "ui_surface", "command_log", "screenshot", "change_snapshot"
+            }
             or (a.kind == "preview" and a.metadata_json.get("automation_session_id"))
             or a.id in source_uploads
         }
@@ -330,11 +332,13 @@ def _preserve_generation_runs(db, run_ids):
 
 
 def _remove_records(identifier):
+    from workbench.modules.agent_services.domain import AgentSessionBinding
     from workbench.modules.automation.domain import (
         AutomationAction,
         AutomationSession,
         DesktopWriterLease,
     )
+    from workbench.modules.changes.domain import ChangeRecord, CommandCapture
     from workbench.modules.collaboration.domain import AgentMessage, AgentSlot, AgentTurn
     from workbench.modules.interactions import Approval, Question
     from workbench.modules.mcp.host_domain import ToolExchange
@@ -357,6 +361,9 @@ def _remove_records(identifier):
         )
         removed_ids = set(run_ids + thread_ids + artifact_ids + operation_ids + session_ids)
         for model, condition in (
+            (ChangeRecord, ChangeRecord.operation_id.in_(operation_ids)),
+            (CommandCapture, CommandCapture.operation_id.in_(operation_ids)),
+            (AgentSessionBinding, AgentSessionBinding.thread_id.in_(thread_ids)),
             (Message, Message.thread_id.in_(thread_ids)),
             (QueuedInput, QueuedInput.thread_id.in_(thread_ids)),
             (Approval, Approval.run_id.in_(run_ids)),
@@ -385,7 +392,13 @@ def _remove_records(identifier):
             .where(DesktopWriterLease.session_id.in_(session_ids))
             .values(session_id=None, revoked=True)
         )
+        db.execute(update(Run).where(Run.id.in_(run_ids)).values(
+            final_message_id=None, final_attempt_id=None, finalized_event_seq=None
+        ))
         for model, condition in (
+            (ChangeRecord, ChangeRecord.operation_id.in_(operation_ids)),
+            (CommandCapture, CommandCapture.operation_id.in_(operation_ids)),
+            (AgentSessionBinding, AgentSessionBinding.thread_id.in_(thread_ids)),
             (AutomationAction, AutomationAction.session_id.in_(session_ids)),
             (AutomationSession, AutomationSession.id.in_(session_ids)),
             (ToolExchange, ToolExchange.operation_id.in_(operation_ids)),

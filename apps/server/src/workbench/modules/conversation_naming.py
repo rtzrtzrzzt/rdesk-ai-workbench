@@ -112,6 +112,9 @@ def enqueue_after_success(db, source):
         },
     )
     db.add(task)
+    from workbench.modules.access.service import inherit_binding
+
+    inherit_binding(source, task)
     db.flush()
     db.add(Job(run_id=identifier, available_at=now()))
 
@@ -253,6 +256,9 @@ def parse_title(output):
 
 def _begin(run_id):
     with Session(engine()) as db, db.begin():
+        from workbench.modules.access.service import authorize_run_model
+
+        authorize_run_model(db, db.get(Run, run_id))
         task = db.get(Run, run_id)
         thread = db.scalar(
             select(Thread)

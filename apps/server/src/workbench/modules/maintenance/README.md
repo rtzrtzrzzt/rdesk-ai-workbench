@@ -2,7 +2,7 @@
 
 此模块使用现有 SQLAlchemy/psycopg/pwdlib、stdlib 和本地官方 PostgreSQL16 工具；备份/恢复服务不更改源数据库或角色权限，不启动模型/Worker。HTTP、全局静止 gate、停止与维护界面已由主入口接入，真实隔离恢复范围见末节；BYO 数据库不因此自动获得私有集群管理员能力。
 
-**当前schema039的限制：**`_facts`按`information_schema.columns`检查敏感列名，既有净化allowlist尚未包含`media_connections.encrypted_api_key`与`media_tasks.encrypted_credential`。因此只要数据库存在当前媒体表，本模块就会返回`backup_secret_schema_unsupported`，即使这些列全为空；不会跳过检查生成完整产品备份。下面2026-10-17–18的一致备份与隔离恢复是当时schema的历史证据，不能代表1.0.0全部扩展/媒体/协作数据已通过此产品迁移流程。后续阶段使用的完整PG运维归档与本模块净化备份属于不同流程；当前限制见[实现状态](../../../../../../docs/implementation-status.md)。
+**当前schema040仍保留的限制：**`_facts`按`information_schema.columns`检查敏感列名，既有净化allowlist尚未包含`media_connections.encrypted_api_key`与`media_tasks.encrypted_credential`。因此只要数据库存在当前媒体表，本模块就会返回`backup_secret_schema_unsupported`，即使这些列全为空；不会跳过检查生成完整产品备份。下面2026-10-17–18的一致备份与隔离恢复是当时schema的历史证据，不能代表1.0.0全部扩展/媒体/协作数据已通过此产品迁移流程。后续阶段使用的完整PG运维归档与本模块净化备份属于不同流程；当前限制见[实现状态](../../../../../../docs/implementation-status.md)。
 
 ## 服务与DTO
 

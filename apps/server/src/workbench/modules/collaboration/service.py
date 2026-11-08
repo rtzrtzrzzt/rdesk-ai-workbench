@@ -203,6 +203,11 @@ def spawn(run_id: str, operation_id: str, values: dict) -> dict:
             {authorized_path(base, item).relative_to(base).as_posix() for item in values["paths"]}
         )
         model_id = values.get("model_connection_id") or root.model_connection_id
+        from workbench.modules.access.service import scope_for_run
+
+        public_scope = scope_for_run(db, root)
+        if public_scope and model_id not in public_scope.allowed_model_ids:
+            raise AppError("api_model_denied", "子任务模型未发布给此调用方。", 403, "policy")
         model = models.get(db, root.user_id, model_id)
         models.validate_endpoint(model.endpoint, model.allow_remote)
         revision = models.freeze(db, root.user_id, model_id)
@@ -260,6 +265,7 @@ def spawn(run_id: str, operation_id: str, values: dict) -> dict:
                 "model_revision_id": revision.id,
                 "generation_overrides": generation_overrides,
                 "extensions": list(root.config_snapshot.get("extensions", [])),
+                "project_declarations": root.config_snapshot.get("project_declarations", ""),
                 "max_output_tokens": min(output_limits) if output_limits else None,
                 "runtime_options": {
                     **root.config_snapshot.get("runtime_options", {}),
@@ -272,6 +278,9 @@ def spawn(run_id: str, operation_id: str, values: dict) -> dict:
                 "deliverable": values["deliverable"],
             },
         )
+        from workbench.modules.access.service import inherit_binding
+
+        inherit_binding(root, child)
         db.add(child)
         db.flush()
         db.add(
@@ -602,6 +611,9 @@ def followup(run_id, operation_id, agent_id, content):
             deadline_at=root.deadline_at,
             config_snapshot=config,
         )
+        from workbench.modules.access.service import inherit_binding
+
+        inherit_binding(previous, child)
         db.add(child)
         db.flush()
         db.add(AgentTurn(agent_id=slot.id, run_id=child.id))

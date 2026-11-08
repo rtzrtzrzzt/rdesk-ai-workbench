@@ -602,6 +602,10 @@ def finish(
             request_transport_cleanup(db, run.id, "run_finishing")
             request_cleanup(db, run.id)
             job.completion_status = status
+            if status == "succeeded":
+                from workbench.modules.runs.presentation import seal_reply
+
+                seal_reply(db, run)
             if finish_unconfirmed_cleanup(db, run, job):
                 return
             if (

@@ -143,7 +143,7 @@ def read_notebook(root: Path, values: dict) -> dict:
     return result
 
 
-def edit_notebook(root: Path, values: dict) -> dict:
+def edit_notebook(root: Path, values: dict, **write_hooks) -> dict:
     """Apply operations in order; each index refers to the list after prior operations.
 
     Move destinations are final list indices. Source replacement deliberately preserves
@@ -187,5 +187,6 @@ def edit_notebook(root: Path, values: dict) -> dict:
         root,
         {"path": options.path, "expected_version": version, "content": content},
         patch=False,
+        **write_hooks,
     )
     return {**result, "total_cells": len(cells), "changes": changes, "executed": False}

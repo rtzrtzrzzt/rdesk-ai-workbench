@@ -1,6 +1,6 @@
 {
   "name": "@ai-workbench/web",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "RDesk: an AI-friendly, local-first AI agent workbench.",
   "author": "任天卓 & Codex (AI development assistant)",
   "private": true,

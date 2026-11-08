@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,6 +28,24 @@ class Run(Entity, Base):
     graph_version: Mapped[str] = mapped_column(default="1")
     config_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     error: Mapped[dict | None] = mapped_column(JSONB)
+    execution_origin: Mapped[str] = mapped_column(default="owner", server_default="owner")
+    execution_binding_id: Mapped[str | None] = mapped_column(
+        ForeignKey("execution_bindings.id"), index=True
+    )
+    final_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", use_alter=True, name="fk_run_final_message")
+    )
+    final_attempt_id: Mapped[str | None] = mapped_column(
+        ForeignKey("attempts.id", use_alter=True, name="fk_run_final_attempt")
+    )
+    finalized_event_seq: Mapped[int | None]
+    __table_args__ = (
+        CheckConstraint(
+            "(execution_origin = 'owner' AND execution_binding_id IS NULL) OR "
+            "(execution_origin = 'api' AND execution_binding_id IS NOT NULL)",
+            name="ck_run_execution_origin",
+        ),
+    )
 
 
 class Job(Entity, Base):

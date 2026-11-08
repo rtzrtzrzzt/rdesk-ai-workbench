@@ -63,7 +63,10 @@ from workbench.contracts.responses import (
 from workbench.entrypoints.dependencies import COOKIE, DB, SNAPSHOT, USER, WRITES
 from workbench.entrypoints.dependencies import authenticate as _authenticate
 from workbench.entrypoints.routes.account import router as account_router
+from workbench.entrypoints.routes.agent_api_listener import router as agent_api_listener_router
+from workbench.entrypoints.routes.agent_services import router as agent_services_router
 from workbench.entrypoints.routes.analytics import router as analytics_router
+from workbench.entrypoints.routes.api_access import router as api_access_router
 from workbench.entrypoints.routes.automation import router as automation_router
 from workbench.entrypoints.routes.automation import settings_router as automation_settings_router
 from workbench.entrypoints.routes.collaboration import router as collaboration_router
@@ -80,6 +83,9 @@ from workbench.entrypoints.routes.media import router as media_router
 from workbench.entrypoints.routes.memory import router as memory_router
 from workbench.entrypoints.routes.preferences import router as preferences_router
 from workbench.entrypoints.routes.processes import router as processes_router
+from workbench.entrypoints.routes.project_configuration import (
+    router as project_configuration_router,
+)
 from workbench.entrypoints.routes.sandbox import router as sandbox_router
 from workbench.entrypoints.routes.search import router as search_router
 from workbench.infrastructure.database import database_ready, engine, now
@@ -799,7 +805,11 @@ app.include_router(maintenance_router)
 app.include_router(diagnostics_router)
 app.include_router(preferences_router)
 app.include_router(processes_router)
+app.include_router(project_configuration_router)
 app.include_router(sandbox_router)
+app.include_router(agent_services_router)
+app.include_router(api_access_router)
+app.include_router(agent_api_listener_router)
 
 
 @app.get("/{path:path}", include_in_schema=False)

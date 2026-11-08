@@ -2,6 +2,8 @@
 
 当前版本：**1.0.0，2026-10-26 已完成**；保留2026-10-17原设计基线。产品范围以[需求文档](requirements.md)为准，通用状态与接口以[运行时契约](technical/runtime-and-data.md)为准；当前使用入口见[AI说明书](ai-guide.md)，真实结果与环境限制见[实现状态](implementation-status.md)。以下带日期的增量按后续确认覆盖早期设计。
 
+2026-11-02增量：schema已升级至`040_agent_api`，新增最终答复锚点、文件变更记录及对外Agent授权绑定。`agent_services`持有发布定义、不可变Revision、Session版本和显式只读来源快照；`access`持有Client/Key/Grant、独立namespace及贯穿Run/子任务的ExecutionBinding。可选`public-api`是独立Bearer入口，复用现有Run/Job/LangGraph及Worker，不代理owner HTTP；本机owner仍仅回环Cookie/CSRF，公共listener默认关闭。本轮代码、辅助检查、实际迁移/四应用组件重载及本机真实UI/独立客户端验收已完成；外部设备/TLS与公网网络等待实际环境验证。边界及路由见[对外Agent API](technical/agent-api.md)和[状态第28节](implementation-status.md#28-2026-11-02-最终答复文件变更与对外agent-api)。
+
 2026-10-26对话读取增量：`conversation_history`复用Thread/Message及`history_rows`的分支前缀和历史保护，不增加索引服务或新表；用户范围存入既有ConfigurationState。三个只读工具统一经过实时用户/工作区/任务树策略、资料过滤和有界输出，来源标记在上下文编译时重查，失效片段同时使覆盖它的旧压缩摘要不可复用。`read_workbench_guide`仅提供固定公开AI说明书的版本化读取，不开放任意项目路径。配置门面继续复用模块服务，隐私范围仅用户可写；LSP候选合同复用已有LanguageServer字段并保留旧隐藏命令的更新语义。
 
 2026-10-19工具与设置增量：`configuration`提供统一目录、只读预览和持久回执，写入复用既有模块服务，不重复存储模型/MCP/搜索等配置；`preferences.configuration`只持有新增的账户体验及可信代码智能配置。文件处理复用现有file Worker和持久等待，计划保存在Run配置中；Notebook不执行内核，LSP采用受限短命进程，PTY复用既有命令生命周期。会话命名复用同一固定本地模型、持久Job和单推理许可，优先级低于用户任务。具体合同、真实验证及组件限制见[配置说明](technical/ai-configuration.md)和[状态第17节](implementation-status.md#17-2026-10-19-工具补齐设置接口与交互改进)。
@@ -43,7 +45,7 @@ Agent的生成工具提交一次后，完成当前工具批，再通过既有Lan
 ### 1.1 运行拓扑
 
 ```text
-本机或已授权的局域网浏览器
+本机回环浏览器（owner管理入口）
   └─ React / TypeScript 工作台
        └─ 同源 HTTPS/HTTP API + SSE 事件订阅
             └─ API 进程（FastAPI）
@@ -64,6 +66,11 @@ Agent的生成工具提交一次后，完成当前工具批，再通过既有Lan
                      │    └─ 桌面节点 / MCP 服务
                      └─ 记忆、交互、产物、用量服务
 
+外部 Client（仅显式启用独立监听后）
+  └─ 原生 TLS 或明确配置的 TLS 反向代理入口
+       └─ public-api 进程：Bearer /agent-api/v1 + SSE
+            └─ 同一 PostgreSQL、Run/Job 与既有 Worker
+
 本地文件存储：原件、派生产物、日志、Markdown 记忆、规则和任务摘要
 可选 Valkey：加速通知或协调；不成为任务和权限的事实源
 Launcher：启动、检查与停止受管理进程，不承担 agent 决策
@@ -78,6 +85,7 @@ SSE 是服务器向浏览器连续发送事件的通道。浏览器发送命令�
 ### 1.2 为何选择进程分离
 
 - **API** 处理短请求，及时响应页面、停止请求和配置查询，不在 HTTP 请求中等待整段 agent 推理。
+- **可选 public-api** 只处理发布Agent的Bearer请求，不装配owner会话/设置路由；具备独立Host/TLS与维护门禁，关闭SSE不取消后台Run，启停不重启整个应用栈。
 - **RunWorker** 领取持久任务并推进 LangGraph；Worker 重启后按照记录恢复。
 - **文件处理 Worker** 隔离较重的 OCR、媒体解码和解析过程，避免阻塞任务控制。初期可以共用同一 Worker 发布物，以不同角色启动。
 - **模型服务** 加载权重、管理 GPU 和推理缓存；普通页面重载不触发卸载权重。
@@ -143,6 +151,8 @@ Conversation 保存消息、分支和附件引用；Run 保存一次持续任务
 
 Run 模块拥有任务状态机、任务命令、事件顺序和 Worker 领取机制。执行中的新用户输入作为持久输入事件注入当前运行，在安全边界处理；不会直接修改已经开始发送给提供方的请求体。
 
+最终答复由Run持久保存`final_message_id/final_attempt_id/finalized_event_seq`，Presentation据此生成稳定答复投影，不用“最后一条assistant消息”代替定稿事实。`changes`持有任务文件效果及有界diff、覆盖状态和缺口；由真实文件写入与运行边界采集，不把缺少基线或无法归属的变化伪装成完整结果。
+
 ### 4.3 Agent Runtime 与 Collaboration
 
 负责 LangGraph 的图定义、节点边界、检查点、根任务与子任务协调。主 agent 制定任务、分配上下文并整合，子 agent 在权限和预算内执行。
@@ -195,6 +205,14 @@ Supervisor 管理被工作台启动的进程、准备状态和优雅关闭，不
 
 不能把模型响应慢直接当作进程死亡重启。模型加载、请求排队和无响应分别有状态、超时与恢复策略。
 
+### 4.11 Agent Services 与 Access
+
+`agent_services`负责owner发布模型连接、工具白名单、公开规则与运行预算；Session固定Agent Revision，每个Run沿原模型机制冻结实际ModelRevision。显式来源在发布时冻结为统一canonical，复制到Client/Agent独立工作空间的`_sources/{revision_id}`只读目录，不默认共享整个项目，不把来源规则当作权限。
+
+`access`负责Key摘要认证、动作授权、配额、namespace和ExecutionBinding；后台与子任务继承外部身份，不能因断连、恢复或父子标识变化取得owner权限。执行工具取已绑定范围、原Revision、当前Agent及当前Grant的交集，来源权限同样可实时收缩。Key撤销拒绝后续HTTP/SSE鉴权；Client/Grant/服务执行授权撤销则进入正常取消与资源清理，两者不混为一种生命周期。
+
+公共能力当前覆盖受限文件、计划、问答审批、来源快照及受限子Agent；host shell、电脑操作、MCP和媒体生成尚未开放外部发布。独立listener配置、精确Host、非回环TLS和启动器所有权属于`access.listener`，代理/隧道仍由外部显式配置。完整合同见[对外Agent API](technical/agent-api.md)。
+
 ## 5. 当前代码布局
 
 ```text
@@ -205,8 +223,11 @@ apps/web/src/
   api/                    OpenAPI 生成类型；手写 HTTP、下载与 SSE 适配
 apps/server/src/workbench/
   entrypoints/            API/路由、Worker、CLI 与账户恢复入口
+    api.py                回环owner管理与工作台入口
+    public_api.py         默认关闭的独立Bearer Agent API入口
   modules/                runs、agent_runtime、collaboration、models、context、memory
-                          tools、files、search、mcp、browser、desktop、automation 等
+                          tools、files、search、mcp、browser、desktop、automation
+                          changes、agent_services、access 等
   infrastructure/         配置、数据库、凭据、访问边界与 OS 公共实现
   contracts/              公共错误、事件、账户与分页契约
   composition/            集中导入模块 ORM 声明，供迁移装配；不启动运行服务
@@ -224,6 +245,8 @@ models/                   已下载大资产；忽略且不打入应用源码包
 ```
 
 模块按真实复杂度拆分 `domain.py`、`service.py`、`dto.py` 和适配器；没有为所有模块机械创建五层目录。运行装配由入口承担，`composition/tables.py` 汇集迁移所需的 ORM 元数据；没有独立的 `apps/launcher` 或 `packages`，不将早期设计示意目录冒充现有源码。
+
+当前schema`040_agent_api`在既有表上补充Run最终锚点与外部执行来源，并新增变更、发布服务/版本、Client/Key/Grant、namespace及执行/Session绑定表。监听配置位于`data_dir/agent-api/listener.json`，来源canonical位于`data_dir/agent-api/source-revisions`；独立工作目录位于`data_dir`同级的`{data_dir.name}-api-workspaces`。完整维护必须纳入这些磁盘输入与数据库关系；现有产品备份的凭据schema和媒体限制本轮未修复，不因迁移通过而视为已支持完整备份。
 
 Python 使用 uv 锁文件，前端使用 npm 锁文件。数据库与用户文件位于独立数据根；本机验收资料、截图、日志、环境和模型均不提交 Git。进程角色可以独立运行，但共享同一后端发布物和契约。
 

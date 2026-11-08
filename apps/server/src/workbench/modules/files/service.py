@@ -52,6 +52,10 @@ def get_artifact(db: Session, user_id: str, workspace_id: str, artifact_id: str)
     )
     if row is None:
         raise AppError("artifact_not_found", "文件不存在或不可访问。", 404)
+    from workbench.modules.access.service import internal_artifact
+
+    if internal_artifact(row):
+        raise AppError("artifact_not_found", "文件不存在或不可访问。", 404)
     return row
 
 
@@ -65,6 +69,7 @@ def list_artifacts(db: Session, user_id: str, workspace_id: str) -> list[dict]:
                 Artifact.user_id == user_id,
                 Artifact.workspace_id == workspace_id,
                 Artifact.status == "available",
+                Artifact.kind != "change_snapshot",
             )
             .order_by(Artifact.created_at.desc())
             .limit(500)
@@ -326,6 +331,10 @@ def create_processing(
         )
         run.parent_run_id = actor.id if actor else None
         run.root_run_id = (actor.root_run_id or actor.id) if actor else run.id
+        if actor:
+            from workbench.modules.access.service import inherit_binding
+
+            inherit_binding(actor, run)
         db.add(run)
         db.flush()
         db.add(Job(run_id=run.id, queue="files", available_at=now()))

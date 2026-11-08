@@ -372,6 +372,10 @@ def create(db, user_id, workspace_id, command, *, parent_run_id=None):
             root_run_id=(parent.root_run_id or parent.id) if parent else None,
             config_snapshot={"media_connection": row.id},
         )
+        if parent:
+            from workbench.modules.access.service import inherit_binding
+
+            inherit_binding(parent, run)
         db.add(run)
         db.flush()
         request = command.model_dump(

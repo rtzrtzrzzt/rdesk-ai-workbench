@@ -45,6 +45,9 @@ def ensure_operation(run_id: str, call: dict) -> tuple[str, dict | None, dict]:
             )
         if run.cancel_requested_at:
             raise asyncio.CancelledError
+        from workbench.modules.access.service import authorize_tool
+
+        authorize_tool(db, run, name, values)
         enforce_agent_scope(db, run, name, values)
         operation = db.scalar(
             select(Operation).where(
@@ -158,6 +161,7 @@ def prepare_approval(
     values: dict,
     *,
     provided_arguments: dict | None = None,
+    file_preflight=None,
 ) -> dict:
     with Session(engine()) as db, db.begin():
         run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
@@ -265,9 +269,26 @@ def prepare_approval(
                         )
                     }
                 approval.review = queued_review(approval, argument_sources=sources)
+                if name in {"write_file", "apply_patch"}:
+                    from workbench.modules.tools.file_approval import rules_digest
+
+                    approval.review = {**approval.review, "file_rules_digest": rules_digest(run)}
             db.add(approval)
             db.flush()
             emit(db, run_id, "approval.requested", {"approval": approval_view(approval)})
+            if run.config_snapshot.get("runtime_options", {}).get("approval_mode") == "smart":
+                from workbench.modules.tools.file_approval import reusable_creation
+
+                evidence = reusable_creation(db, run, name, file_preflight)
+                if evidence:
+                    from workbench.modules.tools.review import resolve
+
+                    approval.review = {**approval.review, "file_creation_evidence": evidence}
+                    resolve(
+                        db, run, approval, "allow",
+                        "同一任务已批准新建的普通文件，版本与确认账本连续匹配；本次仅编辑该文件。",
+                        "file_creation_policy",
+                    )
         if approval.status == "pending":
             set_status(db, run, "waiting_approval")
         return approval_view(approval)
@@ -282,6 +303,9 @@ def record_result(
         operation.status = "failed" if result.get("error") is not None else "succeeded"
         operation.effect_status = effect_status
         operation.result = result
+        from workbench.modules.changes.service import confirm_operation
+
+        confirm_operation(db, operation, result)
         observation = (operation.tool_name, operation.arguments)
         emit(
             db,
@@ -368,6 +392,9 @@ def execution_root(run_id: str, operation_id: str, name: str, call_id: str) -> P
         set_status(db, run, "running")
         workspace = db.get(Workspace, run.workspace_id)
         operation = db.get(Operation, operation_id)
+        from workbench.modules.access.service import authorize_tool
+
+        authorize_tool(db, run, name, operation.arguments)
         operation.status = "running"
         operation.effect_status = (
             "possibly_submitted" if TOOLS[name].requires_approval else "not_started"
@@ -407,7 +434,7 @@ def before_tool(run_id, operation_id):
         check_steering(db, run_id, operation_id)
 
 
-def file_change(run_id: str, root: Path, name: str, values: dict) -> dict:
+def file_change(run_id: str, root: Path, name: str, values: dict, operation_id=None) -> dict:
     from workbench.infrastructure.locks import advisory_connection
     from workbench.modules.runs.ownership import assert_owned
 
@@ -418,21 +445,52 @@ def file_change(run_id: str, root: Path, name: str, values: dict) -> dict:
         connection = None
         for target in sorted({str(filesystem.authorized_path(root, path)) for path in targets}):
             connection = locks.enter_context(advisory_connection(f"workspace-file:{target}"))
-        with Session(bind=connection) as db, db.begin():
-            run = db.scalar(select(Run).where(Run.id == run_id).with_for_update())
-            assert_owned(db, run_id)
-            if run.cancel_requested_at:
-                raise asyncio.CancelledError
+        with Session(bind=connection) as db:
+            def check_owner():
+                run = db.scalar(
+                    select(Run).where(Run.id == run_id).with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                assert_owned(db, run_id)
+                if run.cancel_requested_at:
+                    raise asyncio.CancelledError
+                from workbench.modules.access.service import authorize_tool
+
+                authorize_tool(db, run, name, values)
+
+            item_index = 0
+
+            def capture(path, before, after):
+                nonlocal item_index
+                from workbench.modules.changes.service import prepare_managed_change
+
+                operation = db.get(Operation, operation_id)
+                row = prepare_managed_change(db, operation, root, path, before, after, item_index)
+                identifier = row.id
+                item_index += 1
+                db.commit()  # The advisory file lock spans this durable intent boundary.
+                return identifier
+
+            def applied(identifier):
+                from workbench.modules.changes.service import mark_applied
+
+                mark_applied(db, identifier)
+                db.commit()
+
+            check_owner()
+            hooks = (
+                dict(before_write=capture, before_replace=check_owner, after_write=applied)
+                if operation_id else {}
+            )
             if name == "edit_files":
                 from workbench.modules.tools.file_queries import prepare_edits
 
                 prepared = prepare_edits(root, values)
                 results = []
                 for item in prepared:
-                    if run.cancel_requested_at:
-                        raise asyncio.CancelledError
+                    check_owner()
                     try:
-                        results.append(filesystem.change_file(root, item, patch=False))
+                        results.append(filesystem.change_file(root, item, patch=False, **hooks))
                     except AppError as error:
                         return {
                             "files": results,
@@ -444,8 +502,8 @@ def file_change(run_id: str, root: Path, name: str, values: dict) -> dict:
             if name == "edit_notebook":
                 from workbench.modules.tools.notebooks import edit_notebook
 
-                return edit_notebook(root, values)
-            return filesystem.change_file(root, values, patch=name == "apply_patch")
+                return edit_notebook(root, values, **hooks)
+            return filesystem.change_file(root, values, patch=name == "apply_patch", **hooks)
 
 
 def record_unknown(run_id: str, operation_id: str, name: str, result: dict) -> None:
@@ -491,6 +549,9 @@ async def execute_one(run_id: str, call: dict) -> dict:
                         record_result, run_id, operation_id, notice, effect_status="not_started"
                     )
                     return notice
+        from workbench.modules.tools.file_approval import preflight
+
+        prepared_file = await asyncio.to_thread(preflight, run_id, name, values)
         if name == "ask_user":
             question = await asyncio.to_thread(prepare_question, run_id, operation_id, values)
             interrupt({"kind": "question", "question_id": question["id"]})
@@ -525,6 +586,7 @@ async def execute_one(run_id: str, call: dict) -> dict:
                 name,
                 values,
                 provided_arguments=call["arguments"],
+                file_preflight=prepared_file,
             )
             if approval["status"] == "pending":
                 from workbench.modules.tools.review import review
@@ -557,15 +619,34 @@ async def execute_one(run_id: str, call: dict) -> dict:
         result = await bounded(
             run_id, operation_id, name, values, invoke(run_id, operation_id, root, name, values)
         )
+        effect_status = "confirmed"
         if name == "exec_command" and result.get("timed_out"):
-            await asyncio.to_thread(record_unknown, run_id, operation_id, name, result)
-            raise AppError(
-                "command_timed_out", "命令超时，已停止进程，结果需要核对。", 409, "outcome_unknown"
+            if result.get("owned_resources_closed") is not True:
+                await asyncio.to_thread(record_unknown, run_id, operation_id, name, result)
+                raise AppError(
+                    "command_outcome_unknown",
+                    "命令超时，受管进程的停止状态尚未确认；已保留记录，请先核对。",
+                    409,
+                    "outcome_unknown",
+                )
+            # A closed runner gives a durable failure, not a reason to replay or
+            # interrupt the graph. Its partial business effects still need checking.
+            result["error"] = {
+                "code": "command_timed_out",
+                "message": "命令超时，受管进程已停止；可能已产生部分结果，请先核对再调整方案继续。",
+                "retryable": False,
+            }
+            result["next_step"] = (
+                "当前命令已终止，无需因此结束任务。先查看保留的输出、日志和相关产物，"
+                "核对可能的副作用后选择其他方法继续；不要盲目重复原命令，也不要把超时当成成功。"
             )
-        if name == "exec_command" and result["exit_code"] != 0:
+            effect_status = "needs_reconciliation"
+        elif name == "exec_command" and result["exit_code"] != 0:
             result["error"] = {"code": "command_failed", "message": "命令已结束，退出码非零。"}
         result = jsonable_encoder(result)
-        await asyncio.to_thread(record_result, run_id, operation_id, result)
+        await asyncio.to_thread(
+            record_result, run_id, operation_id, result, effect_status=effect_status
+        )
         from workbench.modules.runs.safety import observe
 
         await asyncio.to_thread(observe, run_id, operation_id, name, values, result)
@@ -618,6 +699,21 @@ async def execute_one(run_id: str, call: dict) -> dict:
 
 
 async def invoke(run_id, operation_id, root, name, values):
+    from workbench.contracts.execution import current_scope
+    from workbench.modules.access.service import authorize_tool
+
+    def authority():
+        with Session(engine()) as db:
+            return authorize_tool(db, db.get(Run, run_id), name, values)
+
+    token = current_scope.set(await asyncio.to_thread(authority))
+    try:
+        return await _invoke(run_id, operation_id, root, name, values)
+    finally:
+        current_scope.reset(token)
+
+
+async def _invoke(run_id, operation_id, root, name, values):
     if TOOLS[name].module in {
         "memory",
         "search",
@@ -641,7 +737,7 @@ async def invoke(run_id, operation_id, root, name, values):
 
         return await execute(run_id, operation_id, name, values)
     if name in {"write_file", "apply_patch", "edit_files", "edit_notebook"}:
-        return await asyncio.to_thread(file_change, run_id, root, name, values)
+        return await asyncio.to_thread(file_change, run_id, root, name, values, operation_id)
     if name == "list_files":
         return await asyncio.to_thread(
             filesystem.list_files,
@@ -649,6 +745,7 @@ async def invoke(run_id, operation_id, root, name, values):
             values["path"],
             cursor=values.get("cursor"),
             limit=values.get("limit", 500),
+            include_runtime=values.get("include_runtime", False),
         )
     if name in {"find_files", "read_files", "search_files"}:
         from workbench.modules.tools import file_queries

@@ -27,12 +27,15 @@ import { Maintenance } from './Maintenance'
 import { Vault } from './Vault'
 import { AccountSecurity } from './AccountSecurity'
 import { WorkspaceRuntimeDefaults } from './WorkspaceRuntimeDefaults'
+import { UserDirectory } from './UserDirectory'
+import { ProjectConfiguration } from './ProjectConfiguration'
 import { Diagnostics } from './Diagnostics'
 import { ComputerControl } from './ComputerControl'
 import { ConversationHistory } from './ConversationHistory'
 import { RulesPanel } from '../memory/MemoryPage'
 import { ExtensionsPage } from '../extensions/ExtensionsPage'
 import { MediaConnectionsPanel } from '../media/MediaConnectionsPanel'
+import { ApiServicesPanel } from '../apiServices/ApiServicesPanel'
 import type {
   ModelInput,
   ModelConnection,
@@ -112,6 +115,12 @@ export function SettingsPage({
             title: '数据与维护',
             description: '备份、隔离恢复与临时文件清理。',
             icon: Database,
+          },
+          {
+            id: 'api-services',
+            title: 'API 服务',
+            description: '发布 Agent，管理外部应用权限和 API 访问地址。',
+            icon: Server,
           },
           {
             id: 'advanced',
@@ -230,11 +239,17 @@ export function SettingsPage({
                   <p className="page-note">先创建或选择一个工作区，即可编辑用户全局 AGENTS.md。</p>
                 ))}
               {item.id === 'workspace' && workspace && (
-                <WorkspaceRuntimeDefaults
-                  key={workspace.id}
-                  workspace={workspace}
-                  models={models}
-                />
+                <>
+                  <ProjectConfiguration
+                    workspaceId={workspace.id}
+                    active={selected === 'workspace'}
+                  />
+                  <WorkspaceRuntimeDefaults
+                    key={workspace.id}
+                    workspace={workspace}
+                    models={models}
+                  />
+                </>
               )}
               {item.id === 'security' && userId && (
                 <>
@@ -267,7 +282,15 @@ export function SettingsPage({
                 ) : (
                   <p className="page-note">先创建或选择一个工作区，即可接入生成模型。</p>
                 ))}
-              {item.id === 'maintenance' && userId && <Maintenance key={userId} userId={userId} />}
+              {item.id === 'maintenance' && userId && (
+                <>
+                  <UserDirectory active={selected === 'maintenance'} />
+                  <Maintenance key={userId} userId={userId} />
+                </>
+              )}
+              {item.id === 'api-services' && userId && (
+                <ApiServicesPanel key={userId} active={selected === 'api-services'} />
+              )}
               {item.id === 'advanced' && <Diagnostics />}
             </SettingsPanel>
           ))}
