@@ -166,5 +166,5 @@ def publication_capabilities(db: Session, owner_user_id: str) -> dict:
             "max_scan_entries": sources.MAX_ENTRIES,
             "max_seconds": sources.MAX_SECONDS,
         },
-        "runtime_options_schema": dto.RunOptions.model_json_schema(),
+        "runtime_options_schema": dto.public_runtime_options_schema(),
     }

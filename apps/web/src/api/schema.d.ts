@@ -7110,6 +7110,12 @@ export interface components {
         Run: {
             /** Activity */
             activity?: string | null;
+            /**
+             * Approval Mode
+             * @default manual
+             * @enum {string}
+             */
+            approval_mode?: "smart" | "manual" | "full_access";
             /** Approvals */
             approvals: components["schemas"]["Approval"][];
             /**
@@ -7234,7 +7240,7 @@ export interface components {
              * @default smart
              * @enum {string}
              */
-            approval_mode?: "smart" | "manual";
+            approval_mode?: "smart" | "manual" | "full_access";
             /**
              * Checkpoint Rounds
              * @default 32

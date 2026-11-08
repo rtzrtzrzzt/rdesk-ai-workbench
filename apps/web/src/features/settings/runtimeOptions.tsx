@@ -5,6 +5,7 @@ import type {
   RunOptionOverrides,
 } from '../../api/types'
 import { SandboxSelect, sandboxLabel } from './SandboxSelect'
+import { SettingsDisclosure } from './SettingsDisclosure'
 
 export type NumericKey = {
   [Key in keyof RunOptions]-?: NonNullable<RunOptions[Key]> extends number ? Key : never
@@ -68,7 +69,9 @@ export function validRunOptions(value: RunOptions) {
   return (
     runOptionFields.every((field) => validOption(field.key, value[field.key])) &&
     (value.sandbox_profile === 'native_scoped' || value.sandbox_profile === 'linux_bwrap') &&
-    (value.approval_mode === 'smart' || value.approval_mode === 'manual') &&
+    (value.approval_mode === 'smart' ||
+      value.approval_mode === 'manual' ||
+      value.approval_mode === 'full_access') &&
     ['default', 'disabled', 'low', 'medium', 'xhigh'].includes(
       value.review_reasoning_effort ?? 'low',
     )
@@ -164,8 +167,12 @@ export function RunOptionsFields({
         </select>
       </label>
       <p className="page-note">智能审批自动允许或拒绝操作；无法确认或审核失败时拒绝，不转人工。</p>
-      <details className="runtime-advanced" open>
-        <summary>高级任务预算与执行设置</summary>
+      <SettingsDisclosure
+        className="runtime-advanced"
+        title="高级任务预算与执行设置"
+        summary="预算、审核与执行环境"
+        attention={!validRunOptions(value)}
+      >
         <p className="page-note">
           普通命令和长命令共用时间预算；AI 可为单次操作选择更短时限。修改对新任务生效。
           每轮输出额度独立于上下文容量；思考占用同一额度。收尾预留仅对设置了截止时间的任务生效。
@@ -211,7 +218,12 @@ export function RunOptionsFields({
             if (sandbox_profile) onChange({ ...value, sandbox_profile })
           }}
         />
-      </details>
+        {!validRunOptions(value) && (
+          <p className="form-error" role="alert">
+            请填写范围内的任务预算与执行设置。
+          </p>
+        )}
+      </SettingsDisclosure>
     </>
   )
 }
@@ -256,7 +268,7 @@ export function EffectiveDefaults({
 }) {
   const model = models.find((item) => item.id === effective.model_connection_id)
   return (
-    <details className="runtime-effective" open>
+    <details className="runtime-effective">
       <summary>服务端解析后的当前有效配置与来源</summary>
       <dl className="run-meta">
         {runOptionFields.map((field) => (

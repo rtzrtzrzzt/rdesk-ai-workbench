@@ -5,6 +5,7 @@ import { projectConfigurationApi } from '../../api/projectConfiguration'
 import { Button } from '../../components/ui'
 import { formatBytes } from '../files/FileUpload'
 import { useSettingsAttention } from './SettingsGroup'
+import { SettingsDisclosure } from './SettingsDisclosure'
 import './projectConfiguration.css'
 
 const categories: Record<string, string> = {
@@ -86,56 +87,63 @@ export function UserDirectory({ active }: { active: boolean }) {
           <p className="page-note" role="status">
             {notice}
           </p>
-          <dl className="run-meta">
-            <dt>全局规则</dt>
-            <dd>
-              <code>{query.data.global_rules_path}</code>
-            </dd>
-            <dt>扩展存储</dt>
-            <dd>
-              <code>{query.data.extensions_path}</code>
-            </dd>
-            <dt>会话与配置记录</dt>
-            <dd>PostgreSQL；复制用户目录不能完整备份或迁移会话。</dd>
-          </dl>
-          <div
-            className="project-storage-table"
-            tabIndex={0}
-            role="region"
-            aria-label="用户目录分类占用"
+          <SettingsDisclosure title="目录与数据说明" summary="规则、扩展与会话存储">
+            <dl className="run-meta">
+              <dt>全局规则</dt>
+              <dd>
+                <code>{query.data.global_rules_path}</code>
+              </dd>
+              <dt>扩展存储</dt>
+              <dd>
+                <code>{query.data.extensions_path}</code>
+              </dd>
+              <dt>会话与配置记录</dt>
+              <dd>PostgreSQL；复制用户目录不能完整备份或迁移会话。</dd>
+            </dl>
+          </SettingsDisclosure>
+          <SettingsDisclosure
+            title="存储分类占用"
+            summary={`${query.data.storage.categories.length} 类存储`}
           >
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">分类</th>
-                  <th scope="col">逻辑大小</th>
-                  <th scope="col">观测</th>
-                </tr>
-              </thead>
-              <tbody>
-                {query.data.storage.categories.map((item) => (
-                  <tr key={item.category}>
-                    <th scope="row">{categories[item.category] ?? item.category}</th>
-                    <td>
-                      {item.apparent_bytes == null ? '未知' : formatBytes(item.apparent_bytes)}
-                    </td>
-                    <td>
-                      {reasons[item.reason_code] ??
-                        (item.status === 'partial' ? '部分数据' : '未知')}
-                      {item.skipped_entries ? ` · 跳过 ${item.skipped_entries} 项` : ''}
-                    </td>
+            <div
+              className="project-storage-table"
+              tabIndex={0}
+              role="region"
+              aria-label="用户目录分类占用"
+            >
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">分类</th>
+                    <th scope="col">逻辑大小</th>
+                    <th scope="col">观测</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="page-note">
-            这是有上限的实时分类观测，并非目录总量；不含项目原文件、模型权重、凭据或扩展包占用。PostgreSQL
-            大小单独计算，可能位于其它磁盘。
-          </p>
-          <p className="page-note">
-            保留与清理：任务文件通过任务管理，日志、暂存与备份通过下方维护功能按支持范围处理。全局规则、扩展与凭据继续由各自入口管理；本页不会自动删除、迁移或修改文件。
-          </p>
+                </thead>
+                <tbody>
+                  {query.data.storage.categories.map((item) => (
+                    <tr key={item.category}>
+                      <th scope="row">{categories[item.category] ?? item.category}</th>
+                      <td>
+                        {item.apparent_bytes == null ? '未知' : formatBytes(item.apparent_bytes)}
+                      </td>
+                      <td>
+                        {reasons[item.reason_code] ??
+                          (item.status === 'partial' ? '部分数据' : '未知')}
+                        {item.skipped_entries ? ` · 跳过 ${item.skipped_entries} 项` : ''}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="page-note">
+              这是有上限的实时分类观测，并非目录总量；不含项目原文件、模型权重、凭据或扩展包占用。PostgreSQL
+              大小单独计算，可能位于其它磁盘。
+            </p>
+            <p className="page-note">
+              保留与清理：任务文件通过任务管理，日志、暂存与备份通过下方维护功能按支持范围处理。全局规则、扩展与凭据继续由各自入口管理；本页不会自动删除、迁移或修改文件。
+            </p>
+          </SettingsDisclosure>
         </>
       )}
     </section>

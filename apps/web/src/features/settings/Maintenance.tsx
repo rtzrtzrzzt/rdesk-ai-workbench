@@ -1,5 +1,6 @@
 import { useSettingsAttention } from './SettingsGroup'
-import { useState } from 'react'
+import { SettingsDisclosure, revealSettingsControl } from './SettingsDisclosure'
+import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '../../api/client'
 import { maintenanceApi } from '../../api/maintenance'
@@ -111,7 +112,7 @@ function Manifest({ manifest }: { manifest: BackupManifest }) {
           {text}
         </p>
       ))}
-      <details className="run-json" open>
+      <details className="run-json">
         <summary>完整服务端清单与校验值</summary>
         <pre>{JSON.stringify(manifest, null, 2)}</pre>
       </details>
@@ -160,6 +161,7 @@ export function Maintenance({ userId }: { userId: string }) {
   const [selected, setSelected] = useState('')
   const [label, setLabel] = useState('')
   const [timeout, setTimeout] = useState('')
+  const timeoutControl = useRef<HTMLInputElement>(null)
   const [pending, setPending] = useState<PendingMaintenance | null>(() => readPending(userId))
   const [busy, setBusy] = useState(false)
   const [aborting, setAborting] = useState(false)
@@ -198,8 +200,11 @@ export function Maintenance({ userId }: { userId: string }) {
         !original &&
         seconds !== undefined &&
         (!Number.isInteger(seconds) || seconds < 60 || seconds > 86400)
-      )
+      ) {
+        revealSettingsControl(timeoutControl.current)
+        timeoutControl.current?.focus()
         throw new Error('超时须为 60–86400 秒的整数，或留空使用服务端默认。')
+      }
       command =
         original ??
         (kind === 'backup'
@@ -298,7 +303,10 @@ export function Maintenance({ userId }: { userId: string }) {
           {pending.kind === 'restore' && <p>备份：{pending.command.backup_id}</p>}
         </div>
       )}
-      <div className="maintenance-controls">
+      <div
+        className="maintenance-controls"
+        onInvalidCapture={(event) => revealSettingsControl(event.target)}
+      >
         <label>
           备份标签（可选）
           <input
@@ -308,18 +316,21 @@ export function Maintenance({ userId }: { userId: string }) {
             onChange={(event) => setLabel(event.target.value)}
           />
         </label>
-        <label>
-          维护超时（秒，留空用服务默认）
-          <input
-            type="number"
-            min={60}
-            max={86400}
-            step={1}
-            disabled={busy || !!pending}
-            value={timeout}
-            onChange={(event) => setTimeout(event.target.value)}
-          />
-        </label>
+        <SettingsDisclosure title="高级维护选项" summary="超时限制" attention={!!pending}>
+          <label>
+            维护超时（秒，留空用服务默认）
+            <input
+              ref={timeoutControl}
+              type="number"
+              min={60}
+              max={86400}
+              step={1}
+              disabled={busy || !!pending}
+              value={timeout}
+              onChange={(event) => setTimeout(event.target.value)}
+            />
+          </label>
+        </SettingsDisclosure>
         <div className="button-row">
           <Button
             variant="primary"

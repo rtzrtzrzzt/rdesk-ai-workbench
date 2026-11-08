@@ -9,6 +9,7 @@ import {
   type PromptTemplate,
 } from './PromptTemplateEditor'
 import type { ReasoningChoice } from '../chat/ReasoningEffortSelect'
+import { revealSettingsControl, SettingsDisclosure } from './SettingsDisclosure'
 type NativeEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 const nativeEfforts: NativeEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 type GenerationPreferences = Omit<Generation, 'reasoning_effort' | 'prompt_template'> & {
@@ -87,10 +88,12 @@ export function ModelForm({
   return (
     <form
       className="stacked-form"
+      onInvalidCapture={(event) => revealSettingsControl(event.target)}
       onSubmit={(event) => {
         event.preventDefault()
         const invalidTemplate = templateError(template)
         if (invalidTemplate) {
+          revealSettingsControl(event.currentTarget.querySelector('.prompt-template-editor'))
           setError(invalidTemplate)
           return
         }
@@ -185,8 +188,11 @@ export function ModelForm({
           })
         }}
       />
-      <details className="settings-editor model-advanced" open>
-        <summary>高级参数 · 上下文、生成与缓存观测</summary>
+      <SettingsDisclosure
+        className="model-advanced"
+        title="高级参数"
+        summary={`上下文 ${context.toLocaleString()} token · 生成与缓存观测`}
+      >
         <div className="settings-editor-content">
           <label>
             上下文窗口（token）
@@ -405,7 +411,7 @@ export function ModelForm({
             SGLang 仅适配该引擎的缓存统计扩展，不代表缓存已命中或能力已验证。
           </p>
         </div>
-      </details>
+      </SettingsDisclosure>
       <p className="page-note">
         保存不会发起推理。连接检查只读取模型列表；修改配置可能使能力证据失效。
       </p>

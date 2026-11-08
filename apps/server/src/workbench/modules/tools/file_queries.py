@@ -22,8 +22,7 @@ RUNTIME_DIRECTORIES = frozenset(
     {".cache", ".config", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
 )
 DISCOVERY_NOTE = (
-    "默认跳过运行缓存目录；需要时指定该目录或设置include_runtime=true。"
-    "此选项不放开受保护路径。"
+    "默认跳过运行缓存目录；需要时指定该目录或设置include_runtime=true。此选项不放开受保护路径。"
 )
 
 
@@ -144,12 +143,16 @@ def _cursor(values, path, line=-1):
 
 
 def _includes_runtime(root, path, requested):
-    return requested or any(part in RUNTIME_DIRECTORIES for part in path.relative_to(root).parts)
+    return requested or any(
+        part in RUNTIME_DIRECTORIES
+        for part in PurePosixPath(filesystem.display_path(root, path)).parts
+    )
 
 
 def _paths(root: Path, path: Path, after="", *, include_after=False, include_runtime=False):
     after_parts = PurePosixPath(after).parts if after else ()
     include_runtime = _includes_runtime(root, path, include_runtime)
+    cursor_root = root if path.is_relative_to(root) else (path.parent if path.is_file() else path)
 
     def walk(directory, depth=0):
         if depth > 64:
@@ -160,7 +163,7 @@ def _paths(root: Path, path: Path, after="", *, include_after=False, include_run
             candidate = Path(entry.path)
             if not filesystem._visible_path(root, candidate):
                 continue
-            relative = candidate.relative_to(root).as_posix()
+            relative = candidate.relative_to(cursor_root).as_posix()
             parts = PurePosixPath(relative).parts
             if entry.is_dir(follow_symlinks=False):
                 # Discovery defaults are not access policy. An explicit starting
@@ -176,7 +179,7 @@ def _paths(root: Path, path: Path, after="", *, include_after=False, include_run
                 yield candidate, relative
 
     if path.is_file():
-        relative = path.relative_to(root).as_posix()
+        relative = path.relative_to(cursor_root).as_posix()
         parts = PurePosixPath(relative).parts
         if not after_parts or parts > after_parts or (include_after and parts == after_parts):
             yield path, relative
@@ -188,11 +191,12 @@ def _query_path(root, value):
     # Traversal never follows symlinks; preserve that boundary for an explicitly
     # supplied starting file/directory too, before authorized_path resolves it.
     authorized = filesystem.authorized_path(root, value)
+    # Preserve '..' until every traversed component has been checked: normalizing
+    # first would hide a symlink followed by '..' from the no-follow boundary.
     unresolved = root / value
-    if not unresolved.is_relative_to(root):
-        raise AppError("query_path_denied", "请指定工作区内的真实路径。", 403, "policy")
-    current = root
-    for part in unresolved.relative_to(root).parts:
+    start = root if unresolved.is_relative_to(root) else Path(unresolved.anchor)
+    current = start
+    for part in unresolved.relative_to(start).parts:
         current = current / part
         if current.is_symlink():
             raise AppError(
@@ -221,7 +225,8 @@ def find_files(root, values):
     after, _ = _decode(values)
     files, last, started = [], after, time.monotonic()
     notice = (
-        {} if _includes_runtime(root, path, values["include_runtime"])
+        {}
+        if _includes_runtime(root, path, values["include_runtime"])
         else {"discovery_note": DISCOVERY_NOTE}
     )
     output_bytes = 2
@@ -241,7 +246,8 @@ def find_files(root, values):
             values["pattern"],
             case_sensitive=values["case_sensitive"],
         ):
-            item_bytes = len(json.dumps(relative, ensure_ascii=False).encode()) + 2
+            visible = filesystem.display_path(root, candidate)
+            item_bytes = len(json.dumps(visible, ensure_ascii=False).encode()) + 2
             if item_bytes + 2 > SEARCH_OUTPUT_BYTES:
                 raise AppError(
                     "query_path_too_long", "文件路径超出查询输出预算，请缩小搜索范围。", 422
@@ -253,7 +259,7 @@ def find_files(root, values):
                     "truncated": True,
                     "next_cursor": _cursor(values, last),
                 }
-            files.append(relative)
+            files.append(visible)
             output_bytes += item_bytes
         last = relative
     return {**notice, "files": files, "truncated": False, "next_cursor": None}
@@ -296,7 +302,10 @@ async def search_files(root, values):
     more, timed_out = False, False
     for scanned, (candidate, relative) in enumerate(
         _paths(
-            root, path, after_path, include_after=after_line >= 0,
+            root,
+            path,
+            after_path,
+            include_after=after_line >= 0,
             include_runtime=values["include_runtime"],
         )
     ):
@@ -365,7 +374,7 @@ async def search_files(root, values):
                         and not (relative == after_path and line <= after_line)
                     ):
                         item = {
-                            "path": relative,
+                            "path": filesystem.display_path(root, candidate),
                             **excerpt,
                             "before": list(previous),
                             "after": [],
@@ -416,7 +425,8 @@ async def search_files(root, values):
     cursor = _next_cursor(values, last, original) if more else None
     return {
         **(
-            {} if _includes_runtime(root, path, values["include_runtime"])
+            {}
+            if _includes_runtime(root, path, values["include_runtime"])
             else {"discovery_note": DISCOVERY_NOTE}
         ),
         "matches": results,

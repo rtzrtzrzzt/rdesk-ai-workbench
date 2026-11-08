@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { CapabilitiesUpdate, ModelConnection } from '../../api/types'
 import { Button, Status } from '../../components/ui'
+import { revealSettingsControl, SettingsDisclosure } from './SettingsDisclosure'
 import './capabilities.css'
 const names: Record<string, string> = {
   text: '文本',
@@ -26,8 +27,11 @@ function directionLabel(value: string | undefined) {
 }
 function AdapterRoutes({ model }: { model: ModelConnection }) {
   return (
-    <details className="model-adapter-routes" open>
-      <summary>协议适配路线与限制</summary>
+    <SettingsDisclosure
+      className="model-adapter-routes"
+      title="协议适配路线与限制"
+      summary={`${Object.values(model.adapter_routes).filter((route) => route.status === 'available').length} / ${Object.keys(model.adapter_routes).length} 条路线可用`}
+    >
       <p className="page-note">
         这是工作台已实现的协议路线。模型支持声明、启用状态和验证证据独立，不会因路线可用而自动启用模型能力。
       </p>
@@ -75,7 +79,7 @@ function AdapterRoutes({ model }: { model: ModelConnection }) {
           )
         })}
       </div>
-    </details>
+    </SettingsDisclosure>
   )
 }
 const evidence: Record<string, string> = {
@@ -104,6 +108,11 @@ export function Capabilities({
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const capabilities = Object.values(model.capabilities)
+  const enabledCount = capabilities.filter((capability) => capability.enabled).length
+  const verifiedCount = capabilities.filter(
+    (capability) => capability.evidence_status === 'verified',
+  ).length
   const execute = async (action: () => Promise<void>) => {
     setBusy(true)
     setError('')
@@ -116,8 +125,12 @@ export function Capabilities({
     }
   }
   return (
-    <details className="model-capabilities" open>
-      <summary>能力与证据</summary>
+    <SettingsDisclosure
+      className="model-capabilities"
+      title="能力与证据"
+      summary={`${capabilities.length} 项能力 · 已启用 ${enabledCount} · 已验证 ${verifiedCount}`}
+      attention={Boolean(error)}
+    >
       <p className="page-note">
         连接在线仅说明服务可访问。能力方向、模型支持声明、启用状态与验证证据分别记录。
       </p>
@@ -148,10 +161,10 @@ export function Capabilities({
         导入已验证的本机部署证据
       </Button>
       <p className="page-note">仅导入与当前端点和模型精确匹配的受管部署证据。</p>
-      <details open>
-        <summary>手动声明能力</summary>
+      <SettingsDisclosure title="手动声明能力" summary="声明支持与启用状态">
         <form
           className="stacked-form"
+          onInvalidCapture={(event) => revealSettingsControl(event.target)}
           onSubmit={(e) => {
             e.preventDefault()
             void execute(() =>
@@ -217,7 +230,7 @@ export function Capabilities({
             保存本项声明
           </Button>
         </form>
-      </details>
+      </SettingsDisclosure>
       {error && (
         <div role="alert">
           <p className="form-error">{error}</p>
@@ -226,6 +239,6 @@ export function Capabilities({
           </Button>
         </div>
       )}
-    </details>
+    </SettingsDisclosure>
   )
 }

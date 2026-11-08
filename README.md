@@ -6,7 +6,7 @@
 
 RDesk brings together chat, durable tasks, multi-agent collaboration, MCP tools and resources, persistent Markdown memory, browser automation and image generation. Tasks retain their state, tool results and file provenance so you can inspect, steer, stop and resume work.
 
-**1.1.0 · Apache-2.0 · Authors: 任天卓 (Ren Tianzhuo) & Codex**
+**1.2.0 · Apache-2.0 · Authors: 任天卓 (Ren Tianzhuo) & Codex**
 
 [Quick start](#first-time-setup) · [Capabilities and limitations](#capabilities-and-limitations) · [AI operating guide](docs/ai-guide.md) · [Documentation](docs/README.md) · [Authors](#authors)
 
@@ -26,7 +26,7 @@ RDesk brings together chat, durable tasks, multi-agent collaboration, MCP tools 
 
 > **This repository contains source code, documentation and dependency configuration. It does not contain model weights, inference environments, user files, conversations, databases or credentials.** Prepare models and optional components separately; see the [model runtime guide](runtime/model/README.md) and [image generation guide](runtime/media/README.md).
 
-Version **1.1.0** adds Agent API publishing, process summaries and file diffs, project configuration, and execution-budget and authorization fixes. See the [release notes](docs/releases/1.1.0.md) and [implementation and acceptance record](docs/implementation-status.md) for scope, upgrade requirements and validation limits. Detailed project documentation and the AI operating guide are currently in Chinese.
+Version **1.2.0** simplifies the composer and settings, adds independently expandable workspace groups, and provides explicit manual, smart and full-access approval modes. See the [release notes](docs/releases/1.2.0.md) and [implementation and acceptance record](docs/implementation-status.md) for scope, upgrade requirements and validation limits. Detailed project documentation and the AI operating guide are currently in Chinese.
 
 ## How it works
 
@@ -36,7 +36,9 @@ The owner workbench listens on loopback only and does not require an application
 
 **Settings → API Services** can publish selected Agent capabilities through a separate Bearer API. Configure models, tools, explicit read-only source snapshots, client keys and grants; remote calls run durable server-side Agent tasks with questions, streaming events and downloadable files. The listener is disabled by default; direct remote listening requires TLS. See the [Agent API guide](docs/technical/agent-api.md) for routes and current capability limits. Local UI and independent-client acceptance have passed; external-device and public-network connectivity still require deployment-specific validation.
 
-By default, a separate request to the configured local model reviews operations that require authorization, including file writes and command execution. Subsequent edits to an ordinary file created and approved in the same owner Run may reuse that creation grant when its version chain, rules and user instructions still match; every decision retains its own approval record. Other operations keep their existing review boundaries. Uncertain decisions, review failures and an unavailable local reviewer result in denial with a reason. Manual approval is used only when explicitly selected by the user. Workspace, file-version, network and credential boundaries still apply.
+By default, a separate request to the configured local model reviews operations that require authorization, including file writes and command execution. Subsequent edits to an ordinary file created and approved in the same owner Run may reuse that creation grant when its version chain, rules and user instructions still match; every decision retains its own approval record. Other operations keep their existing review boundaries. Uncertain decisions, review failures and an unavailable local reviewer result in denial with a reason. The composer offers manual approval for each tool operation, smart approval using the local reviewer, and explicitly confirmed full access for new owner tasks. Full access skips human and model approval and lets file tools access paths outside the workspace under the service account; it is not an OS sandbox. Protected credential paths and existing account, API, delegation and file-version checks remain. Full access cannot be saved as a user/workspace/project default or exposed through the Agent API.
+
+The composer places uploads and approval choices on the left and combines model and reasoning choices on the right. Workspace groups expand independently in the sidebar. Settings separate everyday preferences from secondary pages and collapsed advanced options; existing fields and unsaved drafts remain available.
 
 While a task runs, new messages can be queued or used to steer it, according to **Settings → General**. Queued messages can be promoted to immediate steering. In-progress tools reach a safe boundary before new instructions take effect. Stopping is a separate action. Failure or cancellation pauses and preserves the queue; automatic dispatch resumes only after successful completion and resource cleanup. Conversations support renaming, archiving, branching from edited user messages and deletion after a scope preview.
 
@@ -44,7 +46,7 @@ Chat displays progress and expandable tool calls in execution order, including p
 
 Upload attachments by selection, drag-and-drop or paste: up to **1 GB per file and eight files per message**, without an extension allowlist. Supported previews and content preparation run automatically; unsupported formats retain the original file and clearly report that their content was not read. The first two images in a message are prepared automatically. Sending attachments to a remote model requires transfer confirmation.
 
-Install plugins and Skills from a local directory, ZIP or Git source in **Settings → Plugins and Skills**. Tasks freeze the installed version; disabling an extension revokes subsequent use. Dedicated read tools expose registered rules and Skills. Model settings offer native behavior, five workbench instruction presets or custom instructions; these presets do not imply every model supports a native “Max” parameter.
+Install plugins and Skills from a local directory, ZIP or Git source in **Settings → Extensions**. Tasks freeze the installed version; disabling an extension revokes subsequent use. Dedicated read tools expose registered rules and Skills. Model settings offer native behavior, five workbench instruction presets or custom instructions; these presets do not imply every model supports a native “Max” parameter.
 
 The **Generate** page supports configured image, video, audio and 3D adapters. Local FLUX 3 Image Klein NVFP4 generation and reference editing have been tested on Spark. Other modalities require a compatible provider; unavailable ones are identified in the interface. Outputs enter the shared file library. Batch deletion stops active tasks and checks resource closure first; deleting records preserves output files and existing references. See [generation architecture](docs/technical/extensions-and-generation.md).
 

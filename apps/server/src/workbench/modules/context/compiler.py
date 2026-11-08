@@ -230,7 +230,7 @@ def compile_context(db: Session, run: Run, messages: list[dict], tools: list[dic
     history_scope = "disabled" if scope else scope_for(db, run)[0]
     text += (
         f"\n其它对话当前读取范围：{history_scope}。"
-        "关闭或扩大范围须用户在设置→通用→其它对话读取范围操作；AI不能自行放宽。"
+        "关闭或扩大范围须用户在设置→权限与隐私→其他对话读取范围操作；AI不能自行放宽。"
     )
     text += (
         "\n当前单条命令执行时限预算："
@@ -242,6 +242,20 @@ def compile_context(db: Session, run: Run, messages: list[dict], tools: list[dic
     )
     if options.get("approval_mode") == "smart":
         text += "当前为智能审批，由工作台自动允许或拒绝；不要要求用户手动批准工具操作。"
+    elif options.get("approval_mode") == "manual":
+        from workbench.modules.tools.authority import is_local_owner
+
+        if is_local_owner(run):
+            text += (
+                "本机对话为每步批准，工具操作由工作台逐项等待用户确认，"
+                "不要重复用提问工具索取相同批准。"
+            )
+    elif options.get("approval_mode") == "full_access":
+        text += (
+            "当前任务由用户明确授予完全开放权限，操作不经人工或AI审批；"
+            "文件工具可使用工作区外的绝对路径，仍禁止访问工作台凭据及受保护路径。"
+            "主机命令按服务账号的系统权限执行；这不新增系统权限，也不解除子任务的工具和路径限制。"
+        )
     if run.parent_run_id:
         text += (
             "\n你是主任务委派的子Agent。需要主任务澄清或发现重要进展时，"
@@ -314,7 +328,7 @@ def compile_context(db: Session, run: Run, messages: list[dict], tools: list[dic
                 "role": "user",
                 "source_kind": "project_configuration",
                 "content": project_declarations,
-            }
+            },
         )
     if plan:
         compiled.insert(
@@ -359,7 +373,10 @@ def path_rule_notice(db: Session, run_id: str, relative: str) -> dict | None:
     root = Path(db.get(Workspace, run.workspace_id).root_path).resolve()
     from workbench.modules.tools.filesystem import authorized_path
 
-    target = authorized_path(root, relative).relative_to(root).as_posix()
+    path = authorized_path(root, relative)
+    if not path.is_relative_to(root):
+        return None
+    target = path.relative_to(root).as_posix()
     snapshot = memory.load_rules(db, run.user_id, run.workspace_id, [target])
     known = {
         item["source_path"]: item["version"]

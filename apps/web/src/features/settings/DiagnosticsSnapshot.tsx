@@ -85,7 +85,7 @@ export function DiagnosticsSnapshotView({ data }: { data: DiagnosticsSnapshot })
           </p>
         </article>
       </div>
-      <details open>
+      <details>
         <summary>组件版本与数据库结构</summary>
         <dl className="run-meta">
           <dt>运行时</dt>
@@ -126,7 +126,7 @@ export function DiagnosticsSnapshotView({ data }: { data: DiagnosticsSnapshot })
         </div>
         <p className="page-note">来源：应用与已安装发行包元数据、PostgreSQL 只读查询。</p>
       </details>
-      <details open>
+      <details>
         <summary>两类任务队列与 Worker 心跳</summary>
         <div className="diagnostics-queues">
           {data.queues.map((queue) => (
@@ -164,7 +164,7 @@ export function DiagnosticsSnapshotView({ data }: { data: DiagnosticsSnapshot })
           来源：Worker 心跳记录与当前用户任务状态。心跳不代表单项工具或模型已经验真。
         </p>
       </details>
-      <details open>
+      <details>
         <summary>存储分类与观测范围</summary>
         <ReadingStatus status={data.storage.status} code={data.storage.reason_code} />
         <dl className="run-meta">
@@ -221,7 +221,7 @@ export function DiagnosticsSnapshotView({ data }: { data: DiagnosticsSnapshot })
           实时、非原子观测；表观大小不等于磁盘实际占用，分类可能有重叠，不应相加作为总量。不读取文件正文，不纳入外部工作区文件；部分数据保留缺失原因。
         </p>
       </details>
-      <details open>
+      <details>
         <summary>近期受控错误码</summary>
         <ReadingStatus status={data.recent_errors.status} code={data.recent_errors.reason_code} />
         <p className="page-note">
@@ -269,7 +269,7 @@ export function DiagnosticsSnapshotView({ data }: { data: DiagnosticsSnapshot })
           </p>
         )}
       </details>
-      <details open>
+      <details>
         <summary>模型参考信息 · PLE 未测量</summary>
         <dl className="run-meta">
           <dt>性质</dt>

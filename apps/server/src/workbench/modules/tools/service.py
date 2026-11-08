@@ -17,6 +17,12 @@ from workbench.modules.interactions import Approval, Question
 from workbench.modules.runs.domain import Run
 from workbench.modules.runs.service import approval_view, emit, question_view, set_status
 from workbench.modules.tools import filesystem
+from workbench.modules.tools.authority import (
+    current_file_authority,
+    for_run,
+    full_access_enabled,
+    is_local_owner,
+)
 from workbench.modules.tools.domain import Operation
 from workbench.modules.tools.registry import CORE_TOOL_NAMES, TOOLS
 from workbench.modules.tools.validation import command_timeout, parameter_error
@@ -168,11 +174,17 @@ def prepare_approval(
         check_steering(db, run_id, operation_id)
         approval = db.scalar(select(Approval).where(Approval.operation_id == operation_id))
         if approval is None:
-            summary = (
-                "允许在主机运行此命令？当前模式仅限制工作目录，未提供系统沙箱。"
-                if name in {"exec_command", "start_command"}
-                else f"允许 {name} 修改这个文件？提交前会再次核对版本。"
-            )
+            summary = {
+                "read_file": "允许读取这个文件？",
+                "read_files": "允许读取这些文件？",
+                "read_notebook": "允许读取这个 Notebook？",
+                "list_files": "允许列出这些文件？",
+                "find_files": "允许查找这些文件？",
+                "search_files": "允许搜索这些文件的内容？",
+                "discover_tools": "允许查找可用工具？",
+            }.get(name, "允许执行这次工具操作？")
+            if name in {"write_file", "apply_patch", "edit_files", "edit_notebook"}:
+                summary = "允许修改这个文件？提交前会再次核对版本。"
             if TOOLS[name].module == "media":
                 summary = (
                     "允许使用已接入的生成模型按本次参数提交一次任务？提交结果未知时不会自动重提。"
@@ -276,6 +288,17 @@ def prepare_approval(
             db.add(approval)
             db.flush()
             emit(db, run_id, "approval.requested", {"approval": approval_view(approval)})
+            if full_access_enabled(run):
+                from workbench.modules.tools.review import resolve
+
+                resolve(
+                    db,
+                    run,
+                    approval,
+                    "allow",
+                    "用户为此任务明确选择了完全开放权限；仍核对操作参数和文件版本。",
+                    "full_access",
+                )
             if run.config_snapshot.get("runtime_options", {}).get("approval_mode") == "smart":
                 from workbench.modules.tools.file_approval import reusable_creation
 
@@ -285,7 +308,10 @@ def prepare_approval(
 
                     approval.review = {**approval.review, "file_creation_evidence": evidence}
                     resolve(
-                        db, run, approval, "allow",
+                        db,
+                        run,
+                        approval,
+                        "allow",
                         "同一任务已批准新建的普通文件，版本与确认账本连续匹配；本次仅编辑该文件。",
                         "file_creation_policy",
                     )
@@ -354,17 +380,20 @@ def approved_result(approval_id: str, values: dict) -> bool:
 def needs_approval(run_id: str, name: str, values: dict) -> bool:
     if TOOLS[name].requires_approval:
         return True
-    if name != "read_artifact":
-        return False
     from workbench.modules.files.inputs import is_remote, local_only_source
     from workbench.modules.files.service import get_artifact
     from workbench.modules.models.domain import ModelRevision
 
     with Session(engine()) as db:
         run = db.get(Run, run_id)
+        every_step = is_local_owner(run) and (
+            run.config_snapshot.get("runtime_options", {}).get("approval_mode") == "manual"
+        )
+        if name != "read_artifact":
+            return every_step
         revision = db.get(ModelRevision, run.config_snapshot["model_revision_id"])
         if not is_remote(revision.configuration["endpoint"]):
-            return False
+            return every_step
         if local_only_source(
             db, get_artifact(db, run.user_id, run.workspace_id, values["artifact_id"])
         ):
@@ -374,7 +403,7 @@ def needs_approval(run_id: str, name: str, values: dict) -> bool:
         from workbench.modules.conversations import Message
 
         target = f"{revision.connection_id}:{revision.connection_version}"
-        return not any(
+        return every_step or not any(
             values["artifact_id"] in {item["artifact_id"], item.get("source_artifact_id")}
             and item.get("consent_remote")
             and item.get("consent_target") == target
@@ -446,9 +475,12 @@ def file_change(run_id: str, root: Path, name: str, values: dict, operation_id=N
         for target in sorted({str(filesystem.authorized_path(root, path)) for path in targets}):
             connection = locks.enter_context(advisory_connection(f"workspace-file:{target}"))
         with Session(bind=connection) as db:
+
             def check_owner():
                 run = db.scalar(
-                    select(Run).where(Run.id == run_id).with_for_update()
+                    select(Run)
+                    .where(Run.id == run_id)
+                    .with_for_update()
                     .execution_options(populate_existing=True)
                 )
                 assert_owned(db, run_id)
@@ -480,7 +512,8 @@ def file_change(run_id: str, root: Path, name: str, values: dict, operation_id=N
             check_owner()
             hooks = (
                 dict(before_write=capture, before_replace=check_owner, after_write=applied)
-                if operation_id else {}
+                if operation_id
+                else {}
             )
             if name == "edit_files":
                 from workbench.modules.tools.file_queries import prepare_edits
@@ -529,7 +562,21 @@ def record_unknown(run_id: str, operation_id: str, name: str, result: dict) -> N
         )
 
 
+def _file_authority(run_id):
+    with Session(engine()) as db:
+        return for_run(db, db.get(Run, run_id))
+
+
 async def execute_one(run_id: str, call: dict) -> dict:
+    authority = await asyncio.to_thread(_file_authority, run_id)
+    token = current_file_authority.set(authority)
+    try:
+        return await _execute_one(run_id, call)
+    finally:
+        current_file_authority.reset(token)
+
+
+async def _execute_one(run_id: str, call: dict) -> dict:
     try:
         operation_id, existing, values = await asyncio.to_thread(ensure_operation, run_id, call)
         if existing is not None:

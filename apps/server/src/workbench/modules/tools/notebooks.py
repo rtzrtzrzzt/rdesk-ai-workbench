@@ -99,7 +99,7 @@ def read_notebook(root: Path, values: dict) -> dict:
         raise AppError("invalid_cell_range", "每次读取不超过 100 个单元格，索引从 0 开始。")
     path, notebook, version = _load(root, options.path)
     result = {
-        "path": str(path.relative_to(root.resolve())),
+        "path": filesystem.display_path(root, path),
         "version": version,
         "nbformat": notebook["nbformat"],
         "total_cells": len(notebook["cells"]),

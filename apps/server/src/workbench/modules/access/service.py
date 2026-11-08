@@ -350,9 +350,11 @@ def defaults_for_binding(binding):
     from workbench.contracts.requests import RunOptions
     from workbench.modules.preferences.service import ResolvedDefaults
 
-    options = RunOptions.model_validate({
-        "model_output_recovery_tokens": 0, **binding.snapshot["runtime_options"]
-    })
+    options = RunOptions.model_validate(
+        {"model_output_recovery_tokens": 0, **binding.snapshot["runtime_options"]}
+    )
+    if options.approval_mode == "full_access":
+        raise denied("对外执行不能获得主机完全开放权限。", "api_full_access_denied")
     return ResolvedDefaults(
         options=options,
         sources=dict.fromkeys(type(options).model_fields, "agent_service"),

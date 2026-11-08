@@ -99,6 +99,9 @@ def view(db: Session, run: Run) -> dict:
         "thread_id": run.thread_id,
         "status": run.status,
         "model_connection_id": run.model_connection_id,
+        "approval_mode": run.config_snapshot.get("runtime_options", {}).get(
+            "approval_mode", "manual"
+        ),
         "reasoning_effort": (
             "disabled"
             if run.config_snapshot.get("generation_overrides", {}).get("thinking_mode")

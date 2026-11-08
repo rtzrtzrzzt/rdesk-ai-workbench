@@ -29,7 +29,7 @@ SECTIONS = {
         ("user",),
         "live_permission",
         "account",
-        "AI可读取范围和版本；扩大/关闭须用户在设置→通用→其它对话读取范围操作。"
+        "AI可读取范围和版本；扩大/关闭须用户在设置→权限与隐私→其他对话读取范围操作。"
         "新工具list_conversations/search_conversations/read_conversation每次检查；当前任务恢复read_task_history保持原边界。",
         True,
     ),

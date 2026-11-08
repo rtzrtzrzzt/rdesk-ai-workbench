@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react'
 import { useId, useRef, useState } from 'react'
-import { ArrowUp, Paperclip, Square } from 'lucide-react'
+import { ArrowUp, Plus, Square } from 'lucide-react'
 import { IconButton } from '../../components/ui'
 import { SlashCommands, type ComposerCommand } from './SlashCommands'
+import './composerMenus.css'
 
 export function Composer({
   value,
@@ -13,33 +14,26 @@ export function Composer({
   sending = false,
   stopping = false,
   running = false,
-  models = [],
-  modelId,
-  onModelChange,
-  onAttachments,
   onFiles,
   attachmentSummary,
   attachmentsDisabled = false,
-  modelDisabled = false,
   readOnly = false,
   sendLabel = '发送消息',
   placeholder = '描述你想完成的工作…',
-  options,
-  reasoningControl,
+  modelControl,
+  permissionControl,
   controls,
   contextControl,
   commands = [],
 }: {
-  options?: ReactNode
-  reasoningControl?: ReactNode
+  modelControl?: ReactNode
+  permissionControl?: ReactNode
   controls?: ReactNode
   contextControl?: ReactNode
   commands?: ComposerCommand[]
-  modelDisabled?: boolean
   readOnly?: boolean
   sendLabel?: string
   placeholder?: string
-  onAttachments?: () => void
   onFiles?: (files: File[]) => void
   attachmentSummary?: ReactNode
   attachmentsDisabled?: boolean
@@ -51,9 +45,6 @@ export function Composer({
   sending?: boolean
   stopping?: boolean
   running?: boolean
-  models?: { id: string; name: string }[]
-  modelId?: string
-  onModelChange?: (id: string) => void
 }) {
   const composing = useRef(false)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -177,8 +168,8 @@ export function Composer({
         <div className="composer-toolbar">
           <div className="composer-tools">
             <IconButton
-              icon={Paperclip}
-              label="上传附件"
+              icon={Plus}
+              label="上传文件"
               onClick={() => fileInput.current?.click()}
               disabled={!onFiles || attachmentsDisabled}
             />
@@ -194,34 +185,7 @@ export function Composer({
                 event.target.value = ''
               }}
             />
-            {onAttachments && (
-              <button
-                type="button"
-                className="composer-library"
-                onClick={onAttachments}
-                disabled={attachmentsDisabled}
-              >
-                文件库
-              </button>
-            )}
-            {options}
-            <label className="model-select-label">
-              <span className="sr-only">本次任务使用的模型</span>
-              <select
-                aria-label="本次任务使用的模型"
-                value={modelId ?? ''}
-                disabled={!models.length || modelDisabled}
-                onChange={(event) => onModelChange?.(event.target.value)}
-              >
-                {!models.length && <option value="">尚无可用模型</option>}
-                {models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {reasoningControl}
+            {permissionControl}
           </div>
           <div className="composer-actions">
             {running && (
@@ -235,6 +199,7 @@ export function Composer({
                 <Square size={14} fill="currentColor" />
               </button>
             )}
+            {modelControl}
             {contextControl}
             <button
               className="send-button"

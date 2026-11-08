@@ -27,7 +27,7 @@ from workbench.modules.files.processors import detect_type
 from workbench.modules.files.storage import file_digest, storage_path
 from workbench.modules.runs.domain import TERMINAL_STATUSES, Run
 from workbench.modules.runs.ownership import assert_owned, current_owner
-from workbench.modules.tools.filesystem import authorized_path
+from workbench.modules.tools.filesystem import authorized_path, display_path
 
 # Match the existing upload limit without reading the whole original into memory.
 MAX_SNAPSHOT_BYTES = 1_073_741_824
@@ -160,7 +160,7 @@ def _stage_snapshot(root: Path, source: Path, directory: Path) -> tuple[Path, st
 def _snapshot(db: Session, run_id: str, command: dto.PresentFile) -> Artifact:
     run, root = _run_scope(db, run_id)
     source = _source_path(run, root, command.path)
-    relative_source = source.relative_to(root).as_posix()
+    relative_source = display_path(root, source)
     user_id, workspace_id = run.user_id, run.workspace_id
     db.rollback()
     candidate_id = new_id()

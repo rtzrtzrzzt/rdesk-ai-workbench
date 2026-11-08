@@ -61,6 +61,10 @@
 .topbar-leading {
   min-width: 0;
 }
+.connection-indicator {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .topbar-leading > span {
   overflow: hidden;
   white-space: nowrap;

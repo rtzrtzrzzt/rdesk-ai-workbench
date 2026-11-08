@@ -107,10 +107,7 @@ def _eligible(run_id, approval_id):
         approval = db.get(Approval, approval_id)
         if approval.status != "pending":
             return False
-        if (
-            run.config_snapshot.get("runtime_options", {}).get("approval_mode", "manual")
-            == "manual"
-        ):
+        if run.config_snapshot.get("runtime_options", {}).get("approval_mode", "manual") != "smart":
             return False
         if approval.review:
             if approval.review.get("decision") == "reviewing":
@@ -123,9 +120,7 @@ def _eligible(run_id, approval_id):
                         "message": "此前审核中断，用量可能未知。",
                     }
                     db.get(Step, attempt.step_id).status = "failed"
-                resolve(
-                    db, run, approval, "deny", "此前自动审核中断，已拒绝本次操作。", "fallback"
-                )
+                resolve(db, run, approval, "deny", "此前自动审核中断，已拒绝本次操作。", "fallback")
                 return False
             if approval.review.get("decision") not in {"queued", "human"}:
                 resolve(
@@ -200,7 +195,7 @@ def _prepare(run_id, approval_id):
 
         authorize_run_model(db, run)
         options = run.config_snapshot.get("runtime_options", {})
-        if options.get("approval_mode", "manual") == "manual":
+        if options.get("approval_mode", "manual") != "smart":
             return None
         revision = db.get(ModelRevision, run.config_snapshot["model_revision_id"])
         frozen = revision.configuration

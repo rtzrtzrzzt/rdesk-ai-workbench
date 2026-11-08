@@ -113,18 +113,20 @@ def _release_unreferenced_snapshots(db, run):
     pending = set()
     for capture in db.scalars(select(CommandCapture).where(CommandCapture.run_id == run.id)):
         if capture.state == "pending":
-            pending.update(
-                item.get("artifact_id") for item in capture.baseline.values()
-            )
+            pending.update(item.get("artifact_id") for item in capture.baseline.values())
         else:
             capture.baseline = {}
     db.flush()
-    referenced = select(ChangeRecord.id).where(
-        or_(
-            ChangeRecord.before_artifact_id == Artifact.id,
-            ChangeRecord.after_artifact_id == Artifact.id,
+    referenced = (
+        select(ChangeRecord.id)
+        .where(
+            or_(
+                ChangeRecord.before_artifact_id == Artifact.id,
+                ChangeRecord.after_artifact_id == Artifact.id,
+            )
         )
-    ).exists()
+        .exists()
+    )
     for artifact in db.scalars(
         select(Artifact).where(
             Artifact.run_id == run.id,
@@ -145,6 +147,8 @@ def _release_unreferenced_snapshots(db, run):
 
 def prepare_managed_change(db, operation, root, path, before, after, item_index=0):
     """Caller holds the file lock. Commit this intent before replacing the file."""
+    from workbench.modules.tools.filesystem import display_path
+
     existing = db.scalar(
         select(ChangeRecord).where(
             ChangeRecord.operation_id == operation.id, ChangeRecord.item_index == item_index
@@ -168,7 +172,7 @@ def prepare_managed_change(db, operation, root, path, before, after, item_index=
         root_run_id=run.root_run_id or run.id,
         workspace_id=run.workspace_id,
         execution_binding_id=getattr(run, "execution_binding_id", None),
-        path=str(path.resolve().relative_to(root.resolve())),
+        path=display_path(root, path),
         before_version=digest(before),
         after_version=digest(after),
         before_exists=before is not None,

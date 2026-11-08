@@ -2,7 +2,7 @@ import hashlib
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, text
 
 from workbench.contracts.errors import AppError
@@ -23,6 +23,13 @@ class DefaultsSave(Command):
     expected_version: int = Field(ge=0)
     options: RunOptions
     model_connection_id: UUID | None = None
+
+    @field_validator("options")
+    @classmethod
+    def explicit_full_access(cls, value):
+        if value.approval_mode == "full_access":
+            raise ValueError("完全开放权限只能在当前对话明确选择，不能设为全局默认。")
+        return value
 
 
 def get(db, user_id):

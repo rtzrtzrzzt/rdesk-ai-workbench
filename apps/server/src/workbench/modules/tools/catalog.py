@@ -27,7 +27,7 @@ def availability(db, run, name, module):
             "用户已关闭跨对话读取。"
             if scope == "disabled"
             else f"当前有效读取范围：{scope}；每次调用实时复核。",
-            "read_settings:conversation_history；扩大范围须用户在通用设置操作。",
+            "read_settings:conversation_history；扩大范围须用户在设置→权限与隐私操作。",
         )
     if module == "search":
         from workbench.modules.search.service import get_connection

@@ -233,3 +233,12 @@ A2UI renderer 专项表列出 React v0.9.1 稳定、v1.0 为计划支持；这�
 设置以任务偏好、连接与安全、备份与维护、高级四组呈现；主题入口独立保留。收起和切页保留已挂载的草稿及待核对状态；失败、未确认请求不得随着折叠消失。授权卡仍展示精确命令、文件路径、内容变更和远程目标，不能为了简洁隐藏决策所需事实。
 
 以上是基于公开资料和本项目流程做出的设计决定，不是用户调研统计或可用性提升百分比。主 agent 已在真实 Chrome 验证单输入框、草稿保留、折叠设置、Escape 焦点返回、390px 窄屏和实际任务补充要求；页面无脚本错误，截图留在本机，仅由本地视觉模型辅助核对。系统性代码审查按用户要求使用三个 gpt-6-astra / max 子 agent，主 agent 编写核心修复并核对跨模块行为；覆盖范围及限制见统一状态清单。
+
+
+## 设置分层补充（2026-11-08）
+
+当前设置改为八个一级分类：通用、模型与连接、Agent 行为、扩展、权限与隐私、数据与维护、API 服务、高级与诊断。主题与消息偏好归通用；任务默认、工作区默认及全局规则进入 Agent 行为的二级页；API 发布、客户端授权与访问地址独立进入。模型的高级参数、能力声明、任务预算、配置来源、路径明细和诊断详情默认折叠，全部已有 GUI 字段仍可展开修改。
+
+依据：[Codex 的应用设置与开发者配置](https://learn.chatgpt.com/docs/developer-settings)区分常用偏好与 Agent 配置；[Claude Code 的设置说明](https://code.claude.com/docs/en/settings)明确 /config 仅呈现部分个人常用项；[Cursor Customize](https://prod.cursor.com/docs/customize-cursor)按能力组织扩展；[Cline 官方 OpenAI Compatible 组件](https://raw.githubusercontent.com/cline/cline/main/apps/vscode/webview-ui/src/components/settings/providers/OpenAICompatible.tsx)的 Model Configuration 初始关闭。比较来自官方文档及当前 main 源码，不代表逐一安装体验，也不宣称像素复刻桌面界面。
+
+界面调整复用原有配置接口、版本及继承语义。各设置分类持续挂载并用 hidden 切换，恢复提示、草稿、待核对操作及一次性密钥不随切页丢失；共享 SettingsDisclosure 保持子控件挂载，revealSettingsControl 在原生或 JS 校验失败时展开全部祖先，确保错误位置可见且可聚焦。

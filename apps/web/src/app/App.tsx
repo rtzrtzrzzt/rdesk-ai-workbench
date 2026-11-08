@@ -12,7 +12,6 @@ import {
   MessageSquare,
   Monitor,
   MoreHorizontal,
-  Search,
   PanelLeftClose,
   Plus,
   Settings,
@@ -48,17 +47,13 @@ import { ApiError, authGeneration } from '../api/client'
 import { Button, EmptyState, IconButton, PageHeading, Status } from '../components/ui'
 import { Dialog } from '../components/Dialog'
 import { filesApi } from '../api/files'
-import {
-  AttachmentList,
-  AttachmentPicker,
-  AttachmentUploads,
-  MessageAttachments,
-} from '../features/chat/Attachments'
+import { AttachmentList, AttachmentUploads, MessageAttachments } from '../features/chat/Attachments'
 import type { DraftAttachment } from '../features/chat/Attachments'
 import { useAttachmentUploads } from '../features/chat/useAttachmentUploads'
 import { Composer } from '../features/chat/Composer'
-import { ReasoningEffortSelect } from '../features/chat/ReasoningEffortSelect'
 import type { ReasoningEffort } from '../features/chat/ReasoningEffortSelect'
+import { ComposerModelMenu } from '../features/chat/ComposerModelMenu'
+import { ApprovalModeMenu } from '../features/chat/ApprovalModeMenu'
 import { ContextUsage, type ContextUsageActions } from '../features/chat/ContextUsage'
 import { MessageContent, shouldRenderMessage } from '../features/chat/MessageContent'
 import { RunDetails, RunPanel } from '../features/chat/RunPanel'
@@ -66,14 +61,14 @@ import { ConversationTimeline } from '../features/chat/ConversationTimeline'
 import { Thinking } from '../features/chat/Thinking'
 import { useSteering } from '../features/chat/useSteering'
 import { useRunStream } from '../features/chat/useRunStream'
+import { runTerminal as terminal, acceptsInput, runStatusLabel } from '../features/chat/runState'
+import { validRunOptions } from '../features/settings/runtimeOptions'
 import {
-  runTerminal as terminal,
-  acceptsInput,
-  runStatusLabel,
-  threadStatusLabel,
-} from '../features/chat/runState'
-import { TaskOptions, validRunOptions } from '../features/chat/TaskOptions'
-import { ConnectionsPage, DiagnosticsPage, SettingsPage } from '../features/settings/Settings'
+  ConnectionsPage,
+  DiagnosticsPage,
+  SettingsPage,
+  type ConnectionsActions,
+} from '../features/settings/Settings'
 import { AuthView } from './Auth'
 import { MemoryPage } from '../features/memory/MemoryPage'
 import { FilesPage } from '../features/files/FilesPage'
@@ -82,6 +77,7 @@ import { ToolsPage } from '../features/tools/ToolsPage'
 import { AnalyticsPage } from '../features/analytics/AnalyticsPage'
 import { AutomationPage } from '../features/automation/AutomationPage'
 import { WorkspaceManager } from '../features/workspaces/WorkspaceManager'
+import { WorkspaceSidebar } from '../features/workspaces/WorkspaceSidebar'
 import { DirectoryPicker } from '../features/workspaces/DirectoryPicker'
 import { ForkDialog } from '../features/chat/ForkDialog'
 import { ConversationExport } from '../features/chat/ConversationExport'
@@ -126,7 +122,6 @@ export function App() {
   const [sidebar, setSidebar] = useState(true)
   const [mobileSidebar, setMobileSidebar] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
-  const [threadFilter, setThreadFilter] = useState('')
   const [settingsVisited, setSettingsVisited] = useState(false)
   const [workspaceId, setWorkspaceId] = useState(
     () => localStorage.getItem('workbench.workspace') ?? '',
@@ -149,7 +144,6 @@ export function App() {
   const [reasoningEfforts, setReasoningEfforts] = useState<
     Record<string, Record<string, ReasoningEffort | null>>
   >({})
-  const [pickingAttachments, setPickingAttachments] = useState(false)
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [notice, setNotice] = useState('')
@@ -222,23 +216,7 @@ export function App() {
   const workspace = activeWorkspaces.find((item) => item.id === workspaceId)
   const threads = useQuery({
     queryKey: ['threads', workspaceId],
-    queryFn: async () => {
-      const listed = await api.threads(workspaceId)
-      // Compare only successful server lists from the same workspace. Local cache
-      // insertions and the first load are not evidence of permanent deletion.
-      const previous = knownThreadLists.current.get(workspaceId)
-      knownThreadLists.current.set(workspaceId, listed)
-      if (previous) {
-        const existing = new Set(listed.map((item) => item.id))
-        const removed = previous.filter((item) => !existing.has(item.id))
-        if (removed.length)
-          await clearDeletedConversations({
-            thread_ids: removed.map((item) => item.id),
-            run_ids: removed.flatMap((item) => (item.latest_run_id ? [item.latest_run_id] : [])),
-          })
-      }
-      return listed
-    },
+    queryFn: () => loadWorkspaceThreads(workspaceId),
     enabled: authenticated && !!workspace,
     refetchInterval: 4000,
   })
@@ -249,6 +227,31 @@ export function App() {
     enabled: authenticated && !!thread,
   })
   const models = useQuery({ queryKey: ['models'], queryFn: api.models, enabled: authenticated })
+  const connectionActions: ConnectionsActions = authenticated
+    ? {
+        onUpdate: async (id, input) => {
+          await api.updateModel(id, input)
+          await models.refetch()
+        },
+        onCapabilities: async (id, input) => {
+          await api.updateCapabilities(id, input)
+          await models.refetch()
+        },
+        onImport: async (id) => {
+          await api.importCapabilities(id)
+          await models.refetch()
+        },
+        onRefresh: () => void models.refetch(),
+        onCreate: async (input) => {
+          await api.createModel(input)
+          await models.refetch()
+        },
+        onCheck: async (id) => {
+          await api.checkModel(id)
+          await models.refetch()
+        },
+      }
+    : {}
   const runs = useQuery({
     queryKey: ['runs', threadId],
     queryFn: () => api.runs(threadId),
@@ -310,11 +313,6 @@ export function App() {
   const composerModel = steeringMode
     ? models.data?.find((model) => model.id === lastRun?.model_connection_id)
     : effectiveModel
-  const visibleThreads = (threads.data ?? []).filter(
-    (item) =>
-      !item.is_subagent &&
-      item.title.toLocaleLowerCase().includes(threadFilter.trim().toLocaleLowerCase()),
-  )
   const attachmentIds = draftAttachments.map((item) => item.artifact_id)
   const preparedAttachments = useQuery({
     queryKey: [
@@ -427,13 +425,32 @@ export function App() {
     if (!current.some((item) => item.id === id && !item.archived && !item.removed_at)) return
     setWorkspaceId(id)
     setModelId('')
-    setThreadFilter('')
     setThreadId('')
     clearStreaming()
     setNotice('')
     navigate('chat')
   }
-  function chooseThread(item: Thread) {
+  async function loadWorkspaceThreads(id: string) {
+    const listed = await api.threads(id)
+    // All sidebar observers reconcile successful lists through the same boundary.
+    const previous = knownThreadLists.current.get(id)
+    knownThreadLists.current.set(id, listed)
+    if (previous) {
+      const existing = new Set(listed.map((item) => item.id))
+      const removed = previous.filter((item) => !existing.has(item.id))
+      if (removed.length)
+        await clearDeletedConversations({
+          thread_ids: removed.map((item) => item.id),
+          run_ids: removed.flatMap((item) => (item.latest_run_id ? [item.latest_run_id] : [])),
+        })
+    }
+    return listed
+  }
+  function chooseThread(item: Thread, targetWorkspaceId = workspaceId) {
+    if (targetWorkspaceId !== workspaceId) {
+      setWorkspaceId(targetWorkspaceId)
+      setModelId('')
+    }
     setThreadId(item.id)
     clearStreaming()
     setNotice('')
@@ -731,7 +748,6 @@ export function App() {
       disconnectStream()
       setThreadId('')
       clearStreaming()
-      setPickingAttachments(false)
     }
     const discard = <T,>(old: Record<string, T>) =>
       Object.fromEntries(Object.entries(old).filter(([id]) => !draftKeys.has(id)))
@@ -950,16 +966,32 @@ export function App() {
           run: () => setDrafts((old) => ({ ...old, [draftKey]: '/' })),
         },
       ]}
-      options={
-        <TaskOptions
-          workspaceId={workspace?.id}
-          models={models.data ?? []}
-          value={options}
-          disabled={steeringMode || sending || unconfirmed}
-          onChange={(value) => setTaskOptions((old) => ({ ...old, [draftKey]: value }))}
+      permissionControl={
+        <ApprovalModeMenu
+          key={draftKey}
+          value={
+            steeringMode
+              ? (lastRun?.approval_mode ?? 'manual')
+              : (options?.approval_mode ??
+                defaults.data?.effective.options.approval_mode ??
+                'smart')
+          }
+          disabled={steeringMode || sending || unconfirmed || !defaults.data}
+          onChange={(value) => {
+            if (!defaults.data) return
+            const baseline = defaults.data.effective.options
+            setTaskOptions((old) => ({
+              ...old,
+              [draftKey]: {
+                ...(old[draftKey] ?? baseline),
+                approval_mode: value,
+                sandbox_profile:
+                  value === 'full_access' ? 'native_scoped' : baseline.sandbox_profile,
+              },
+            }))
+          }}
         />
       }
-      onAttachments={workspace ? () => setPickingAttachments(true) : undefined}
       onFiles={workspace ? uploadAttachments : undefined}
       attachmentsDisabled={steeringMode || sending || unconfirmed}
       attachmentSummary={
@@ -1024,31 +1056,31 @@ export function App() {
       }
       stopping={stopping || currentRun?.status === 'cancelling'}
       onStop={currentRun ? () => void cancel(currentRun) : undefined}
-      models={
-        steeringMode
-          ? [
-              {
-                id: lastRun?.model_connection_id ?? '',
-                name:
-                  models.data?.find((m) => m.id === lastRun?.model_connection_id)?.name ??
-                  '当前任务模型',
-              },
-            ]
-          : [
-              {
-                id: '',
-                name: inheritedModelId
-                  ? `默认 · ${inheritedModel?.name ?? '连接不可用'}`
-                  : '选择模型',
-              },
-              ...readyModels,
-            ]
-      }
-      modelId={steeringMode ? (lastRun?.model_connection_id ?? '') : modelId}
-      modelDisabled={steeringMode || sending || unconfirmed}
-      onModelChange={setModelId}
-      reasoningControl={
-        <ReasoningEffortSelect
+      modelControl={
+        <ComposerModelMenu
+          models={
+            steeringMode
+              ? [
+                  {
+                    id: lastRun?.model_connection_id ?? '',
+                    name:
+                      models.data?.find((m) => m.id === lastRun?.model_connection_id)?.name ??
+                      '当前任务模型',
+                  },
+                ]
+              : [
+                  {
+                    id: '',
+                    name: inheritedModelId
+                      ? `默认 · ${inheritedModel?.name ?? '连接不可用'}`
+                      : '选择模型',
+                  },
+                  ...readyModels,
+                ]
+          }
+          modelId={steeringMode ? (lastRun?.model_connection_id ?? '') : modelId}
+          disabled={steeringMode || sending || unconfirmed}
+          onModelChange={setModelId}
           choices={composerModel?.reasoning_choices ?? []}
           defaultEffort={
             composerModel?.generation.reasoning_effort ??
@@ -1061,9 +1093,8 @@ export function App() {
           defaultDisabled={composerModel?.generation.thinking_mode === 'disabled'}
           invalidValue={requestedEffort && !reasoningEffort ? requestedEffort : null}
           value={steeringMode ? (lastRun?.reasoning_effort ?? null) : reasoningEffort}
-          disabled={steeringMode || sending || unconfirmed}
           steering={steeringMode}
-          onChange={(value) => {
+          onReasoningChange={(value) => {
             if (!effectiveModel) return
             setReasoningEfforts((old) => ({
               ...old,
@@ -1127,39 +1158,6 @@ export function App() {
             <IconButton icon={X} label="关闭导航" onClick={() => setMobileSidebar(false)} />
           </div>
         </div>
-        <div className="workspace-selector">
-          <FolderOpen size={17} />
-          <div>
-            <select
-              aria-label="当前工作区"
-              value={workspace?.id ?? ''}
-              onChange={(event) => chooseWorkspace(event.target.value)}
-              disabled={!activeWorkspaces.length}
-            >
-              <option value="" disabled>
-                {authenticated ? '创建第一个工作区' : '尚未连接工作台'}
-              </option>
-              {activeWorkspaces.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-            {!workspace && <small>选择项目目录</small>}
-          </div>
-          <IconButton
-            icon={Settings}
-            label="管理工作区"
-            disabled={!authenticated}
-            onClick={() => setManagingWorkspaces(true)}
-          />
-          <IconButton
-            icon={Plus}
-            label="创建工作区"
-            disabled={!authenticated}
-            onClick={() => setCreatingWorkspace(true)}
-          />
-        </div>
         <div className="sidebar-new">
           <Button
             variant="secondary"
@@ -1175,7 +1173,7 @@ export function App() {
         </div>
         <nav className="primary-nav">
           {navigation
-            .filter((item) => ['chat', 'files', 'memory', 'media'].includes(item.id))
+            .filter((item) => ['files', 'media'].includes(item.id))
             .map((item) => (
               <button
                 key={item.id}
@@ -1193,7 +1191,15 @@ export function App() {
             title="更多功能"
             onClick={() => setMoreOpen(!moreOpen)}
             className={
-              ['tasks', 'tools', 'devices', 'analytics', 'diagnostics'].includes(view)
+              [
+                'tasks',
+                'memory',
+                'tools',
+                'devices',
+                'analytics',
+                'connections',
+                'diagnostics',
+              ].includes(view)
                 ? 'active'
                 : ''
             }
@@ -1205,8 +1211,9 @@ export function App() {
           <div id="more-navigation" hidden={!moreOpen} className="more-navigation">
             {[
               ...navigation.filter((item) =>
-                ['tasks', 'tools', 'devices', 'analytics'].includes(item.id),
+                ['tasks', 'memory', 'tools', 'devices', 'analytics'].includes(item.id),
               ),
+              { id: 'connections' as View, label: '模型与连接', icon: SlidersHorizontal },
               { id: 'diagnostics' as View, label: '诊断', icon: Activity },
             ].map((item) => (
               <button
@@ -1221,85 +1228,26 @@ export function App() {
             ))}
           </div>
         </nav>
-        <div className="sidebar-conversations">
-          <div className="sidebar-label">最近对话</div>
-          {!!threads.data?.length && (
-            <label className="thread-filter">
-              <Search size={13} />
-              <input
-                aria-label="筛选当前工作区对话"
-                placeholder="筛选对话"
-                value={threadFilter}
-                onChange={(event) => setThreadFilter(event.target.value)}
-              />
-            </label>
-          )}
-          {threads.isError ? (
-            <p>会话暂时无法加载。</p>
-          ) : threads.data?.length ? (
-            <div className="thread-list">
-              {visibleThreads.length === 0 && <p>没有符合的对话。</p>}
-              {visibleThreads
-                .filter((item) => !item.archived)
-                .map((item) => (
-                  <div className="thread-list-row" key={item.id}>
-                    <button
-                      data-thread-id={item.id}
-                      aria-current={threadId === item.id && view === 'chat' ? 'page' : undefined}
-                      className={threadId === item.id && view === 'chat' ? 'selected' : ''}
-                      onClick={() => chooseThread(item)}
-                      title={item.title}
-                    >
-                      <span>{item.title || '新对话'}</span>
-                      <small>
-                        {threadStatusLabel(item)}
-                        {item.queue_count ? ` · ${item.queue_count} 条排队` : ''}
-                      </small>
-                    </button>
-                    <ThreadMenu
-                      thread={item}
-                      onDeleted={clearDeletedConversations}
-                      onChanged={async () => {
-                        await threads.refetch()
-                        await queryClient.invalidateQueries({ queryKey: ['runs'] })
-                      }}
-                    />
-                  </div>
-                ))}
-              <details className="archived-threads">
-                <summary>已归档（{visibleThreads.filter((item) => item.archived).length}）</summary>
-                {visibleThreads
-                  .filter((item) => item.archived)
-                  .map((item) => (
-                    <div className="thread-list-row" key={item.id}>
-                      <button data-thread-id={item.id} onClick={() => chooseThread(item)}>
-                        <span>{item.title}</span>
-                        <small>{item.deleting ? '删除处理中' : '已归档'}</small>
-                      </button>
-                      <ThreadMenu
-                        thread={item}
-                        onDeleted={clearDeletedConversations}
-                        onChanged={async () => {
-                          await threads.refetch()
-                        }}
-                      />
-                    </div>
-                  ))}
-              </details>
-            </div>
-          ) : (
-            <p>
-              还没有会话。
-              <br />
-              你的工作将从一次对话开始。
-            </p>
-          )}
-        </div>
+        <WorkspaceSidebar
+          workspaces={activeWorkspaces}
+          workspaceId={workspaceId}
+          threadId={threadId}
+          chatActive={view === 'chat'}
+          authenticated={authenticated}
+          loadThreads={loadWorkspaceThreads}
+          onSelectWorkspace={chooseWorkspace}
+          onSelectThread={(id, item) => chooseThread(item, id)}
+          onNewThread={chooseWorkspace}
+          onCreateWorkspace={() => setCreatingWorkspace(true)}
+          onManageWorkspaces={() => setManagingWorkspaces(true)}
+          onDeleted={clearDeletedConversations}
+          onThreadsChanged={async (id) => {
+            await queryClient.invalidateQueries({ queryKey: ['threads', id] })
+            await queryClient.invalidateQueries({ queryKey: ['runs'] })
+          }}
+        />
         <nav className="secondary-nav">
-          {[
-            { id: 'connections' as View, label: '模型与连接', icon: SlidersHorizontal },
-            { id: 'settings' as View, label: '设置', icon: Settings },
-          ].map((item) => (
+          {[{ id: 'settings' as View, label: '设置', icon: Settings }].map((item) => (
             <button
               key={item.id}
               title={item.label}
@@ -1527,9 +1475,6 @@ export function App() {
             ) : (
               <div className="new-chat">
                 <div className="greeting">
-                  <div className="greeting-mark">
-                    <Sparkles size={31} strokeWidth={1.25} />
-                  </div>
                   <h1>今天，想完成什么？</h1>
                   <p>从一个想法、一份资料，或一项具体的工作开始。</p>
                 </div>
@@ -1655,42 +1600,12 @@ export function App() {
                 workspace={workspace}
                 models={models.data ?? []}
                 experience={experience}
+                connections={connectionActions}
               />
             </div>
           )}
           {view === 'connections' && (
-            <ConnectionsPage
-              models={models.data}
-              onUpdate={async (id, input) => {
-                await api.updateModel(id, input)
-                await models.refetch()
-              }}
-              onCapabilities={async (id, input) => {
-                await api.updateCapabilities(id, input)
-                await models.refetch()
-              }}
-              onImport={async (id) => {
-                await api.importCapabilities(id)
-                await models.refetch()
-              }}
-              onRefresh={authenticated ? () => void models.refetch() : undefined}
-              onCreate={
-                authenticated
-                  ? async (input) => {
-                      await api.createModel(input)
-                      await models.refetch()
-                    }
-                  : undefined
-              }
-              onCheck={
-                authenticated
-                  ? async (id) => {
-                      await api.checkModel(id)
-                      await models.refetch()
-                    }
-                  : undefined
-              }
-            />
+            <ConnectionsPage models={models.data} {...connectionActions} />
           )}
           {view === 'diagnostics' && (
             <DiagnosticsPage
@@ -1713,27 +1628,6 @@ export function App() {
           </span>
         </div>
       </div>
-      {pickingAttachments && workspace && (
-        <AttachmentPicker
-          key={workspace.id}
-          workspaceId={workspace.id}
-          modelId={effectiveModel ? `${effectiveModel.id}:${effectiveModel.version}` : ''}
-          items={draftAttachments}
-          preparations={preparedAttachments.data ?? []}
-          error={preparedAttachments.error}
-          locked={sending || unconfirmed}
-          onChange={(items) =>
-            setAttachmentDrafts((old) => ({
-              ...old,
-              [draftKey]: typeof items === 'function' ? items(old[draftKey] ?? []) : items,
-            }))
-          }
-          maxItems={Math.max(0, 8 - draftUploads.length)}
-          onFiles={uploadAttachments}
-          onRetry={() => void preparedAttachments.refetch()}
-          onClose={() => setPickingAttachments(false)}
-        />
-      )}
       {creatingWorkspace && (
         <WorkspaceDialog
           onClose={() => setCreatingWorkspace(false)}

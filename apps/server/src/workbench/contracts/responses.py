@@ -162,6 +162,7 @@ class Run(PublicResponse):
     status: str
     model_connection_id: str | None
     reasoning_effort: str | None = None
+    approval_mode: Literal["smart", "manual", "full_access"] = "manual"
     root_run_id: str | None
     parent_run_id: str | None
     state_artifact_id: str | None

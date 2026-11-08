@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import {
   agentServicesApi,
@@ -9,6 +9,7 @@ import {
 import type { RunOptions, Workspace } from '../../api/types'
 import { Button, Status } from '../../components/ui'
 import { useSettingsAttention } from '../settings/SettingsGroup'
+import { revealSettingsControl, SettingsDisclosure } from '../settings/SettingsDisclosure'
 
 const unsupportedLabels: Record<string, string> = {
   host_commands: '主机命令',
@@ -150,8 +151,16 @@ function ServiceForm({
     initial?.definition.source_workspace_id ?? '',
   )
   const [sourcePaths, setSourcePaths] = useState(initial?.definition.source_paths?.join('\n') ?? '')
+  const sourceWorkspaceControl = useRef<HTMLSelectElement>(null)
+  const sourcePathsControl = useRef<HTMLTextAreaElement>(null)
+  const paths = sourcePaths
+    .split('\n')
+    .map((path) => path.trim())
+    .filter(Boolean)
+  const sourceWorkspaceName = workspaces.find((workspace) => workspace.id === sourceWorkspace)?.name
   const budgetSchema = capabilities.runtime_options_schema.properties?.max_model_rounds
   const childSchema = capabilities.runtime_options_schema.properties?.child_agent_limit
+  const supportsChildAgents = capabilities.tools.some((tool) => tool.name === 'spawn_agent')
   const [childLimit, setChildLimit] = useState(
     String(initial?.definition.runtime_options.child_agent_limit ?? 0),
   )
@@ -167,10 +176,6 @@ function ServiceForm({
     setBusy(true)
     setError('')
     try {
-      const paths = sourcePaths
-        .split('\n')
-        .map((path) => path.trim())
-        .filter(Boolean)
       if (
         sourceMode === 'snapshot' &&
         (!sourceWorkspace ||
@@ -185,6 +190,9 @@ function ServiceForm({
           ))
       ) {
         setError('请选择来源工作区，并填写非空的明确相对路径；不能共享整个工作区或填写越界路径。')
+        revealSettingsControl(
+          sourceWorkspace ? sourcePathsControl.current : sourceWorkspaceControl.current,
+        )
         return
       }
       const defaults = Object.fromEntries(
@@ -225,6 +233,7 @@ function ServiceForm({
   return (
     <form
       className="api-service-form"
+      onInvalidCapture={(event) => revealSettingsControl(event.target)}
       onSubmit={(event) => {
         event.preventDefault()
         void save()
@@ -271,7 +280,14 @@ function ServiceForm({
           />
         </label>
         {capabilities.source_sharing?.mode === 'revision_snapshot' && (
-          <>
+          <SettingsDisclosure
+            title="工作区资料共享"
+            summary={
+              sourceMode === 'snapshot'
+                ? `${sourceWorkspaceName ?? (sourceWorkspace || '未选择来源工作区')} · ${paths.length} 条路径 · 只读快照`
+                : '未共享工作区资料'
+            }
+          >
             <label>
               工作区资料共享
               <select value={sourceMode} onChange={(event) => setSourceMode(event.target.value)}>
@@ -284,6 +300,7 @@ function ServiceForm({
                 <label>
                   来源工作区
                   <select
+                    ref={sourceWorkspaceControl}
                     required
                     value={sourceWorkspace}
                     disabled={sourcesLoading}
@@ -302,6 +319,7 @@ function ServiceForm({
                 <label>
                   明确共享的相对路径（每行一个文件或目录）
                   <textarea
+                    ref={sourcePathsControl}
                     required
                     rows={4}
                     value={sourcePaths}
@@ -313,56 +331,63 @@ function ServiceForm({
                 </p>
               </>
             )}
-          </>
+          </SettingsDisclosure>
         )}
-        <label>
-          每次运行最多模型轮数
-          <input
-            required
-            type="number"
-            min={budgetSchema?.minimum ?? 1}
-            max={budgetSchema?.maximum}
-            step={1}
-            value={rounds}
-            onChange={(event) => setRounds(event.target.value)}
-          />
-        </label>
-        {capabilities.tools.some((tool) => tool.name === 'spawn_agent') && (
+        <SettingsDisclosure
+          title="运行预算"
+          summary={`最多 ${rounds || '未设置'} 轮${supportsChildAgents ? ` · 子任务上限 ${childLimit || '未设置'}` : ''}`}
+        >
           <label>
-            子任务上限（0 表示关闭）
+            每次运行最多模型轮数
             <input
               required
               type="number"
-              min={childSchema?.minimum ?? 0}
-              max={childSchema?.maximum}
+              min={budgetSchema?.minimum ?? 1}
+              max={budgetSchema?.maximum}
               step={1}
-              value={childLimit}
-              onChange={(event) => setChildLimit(event.target.value)}
+              value={rounds}
+              onChange={(event) => setRounds(event.target.value)}
             />
           </label>
-        )}
-        <div className="api-tools">
-          <span>允许使用的工具</span>
-          {capabilities.tools.map((tool) => (
-            <label key={tool.name}>
+          {supportsChildAgents && (
+            <label>
+              子任务上限（0 表示关闭）
               <input
-                type="checkbox"
-                checked={tools.includes(tool.name)}
-                onChange={(event) =>
-                  setTools(
-                    event.target.checked
-                      ? [...tools, tool.name]
-                      : tools.filter((name) => name !== tool.name),
-                  )
-                }
+                required
+                type="number"
+                min={childSchema?.minimum ?? 0}
+                max={childSchema?.maximum}
+                step={1}
+                value={childLimit}
+                onChange={(event) => setChildLimit(event.target.value)}
               />
-              <span>
-                {tool.name}
-                <small>{tool.description}</small>
-              </span>
             </label>
-          ))}
-        </div>
+          )}
+        </SettingsDisclosure>
+        <SettingsDisclosure title="允许使用的能力" summary={`已选择 ${tools.length} 项工具`}>
+          <div className="api-tools">
+            <span>允许使用的工具</span>
+            {capabilities.tools.map((tool) => (
+              <label key={tool.name}>
+                <input
+                  type="checkbox"
+                  checked={tools.includes(tool.name)}
+                  onChange={(event) =>
+                    setTools(
+                      event.target.checked
+                        ? [...tools, tool.name]
+                        : tools.filter((name) => name !== tool.name),
+                    )
+                  }
+                />
+                <span>
+                  {tool.name}
+                  <small>{tool.description}</small>
+                </span>
+              </label>
+            ))}
+          </div>
+        </SettingsDisclosure>
       </fieldset>
       {error && (
         <p className="form-error" role="alert">

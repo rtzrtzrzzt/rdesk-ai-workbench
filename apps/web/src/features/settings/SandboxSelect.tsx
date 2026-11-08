@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { settingsApi } from '../../api/settings'
 import type { RunOptions, SandboxCapability } from '../../api/types'
 import { Button } from '../../components/ui'
+import { SettingsDisclosure } from './SettingsDisclosure'
 import './runtime.css'
 
 export type SandboxProfile = NonNullable<RunOptions['sandbox_profile']>
@@ -72,18 +73,23 @@ export function SandboxSelect({
       </label>
       <small>创建新任务时冻结；不可用时不会自动改用其他执行配置。</small>
       {query.data?.map((capability) => (
-        <details key={capability.provider} className="sandbox-capability" open>
-          <summary>
-            {sandboxLabels[capability.provider]} ·{' '}
-            {capability.status === 'ready'
-              ? available(capability)
-                ? '可选'
-                : '缺少探测证据'
-              : capability.status === 'unsupported'
-                ? '不支持'
-                : '不可用'}
-            {!available(capability) && ` · ${capability.reason_code ?? capability.reason}`}
-          </summary>
+        <SettingsDisclosure
+          key={capability.provider}
+          className="sandbox-capability"
+          title={
+            <>
+              {sandboxLabels[capability.provider]} ·{' '}
+              {capability.status === 'ready'
+                ? available(capability)
+                  ? '可选'
+                  : '缺少探测证据'
+                : capability.status === 'unsupported'
+                  ? '不支持'
+                  : '不可用'}
+            </>
+          }
+          summary={!available(capability) ? capability.reason : '查看探测详情'}
+        >
           <p>{capability.reason}</p>
           <dl className="run-meta">
             <dt>探测</dt>
@@ -110,7 +116,7 @@ export function SandboxSelect({
               {capability.checked_at ? new Date(capability.checked_at).toLocaleString() : '未知'}
             </dd>
           </dl>
-        </details>
+        </SettingsDisclosure>
       ))}
       {!query.data && !query.error && <small>正在读取实际执行能力…</small>}
       {query.error && (

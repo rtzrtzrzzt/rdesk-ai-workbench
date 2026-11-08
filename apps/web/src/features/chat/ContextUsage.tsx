@@ -94,6 +94,7 @@ export function ContextUsage({
   return (
     <details
       ref={panel}
+      name="composer-menu"
       className="context-usage"
       onKeyDown={(event) => {
         if (event.key === 'Escape' && panel.current?.open) {

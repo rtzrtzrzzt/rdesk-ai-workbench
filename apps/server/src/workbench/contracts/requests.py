@@ -99,7 +99,7 @@ class InputPlan(Command):
 
 class RunOptions(Command):
     sandbox_profile: Literal["native_scoped", "linux_bwrap"] = "native_scoped"
-    approval_mode: Literal["smart", "manual"] = "smart"
+    approval_mode: Literal["smart", "manual", "full_access"] = "smart"
     review_reasoning_effort: Literal["default", "disabled", "low", "medium", "xhigh"] = "low"
     command_timeout_seconds: int = Field(
         default=DEFAULT_COMMAND_TIMEOUT_SECONDS, ge=1, le=MAX_COMMAND_TIMEOUT_SECONDS, strict=True
@@ -114,6 +114,12 @@ class RunOptions(Command):
     model_retry_limit: int = Field(default=2, ge=0, le=2, strict=True)
     retry_backoff_seconds: int = Field(default=1, ge=1, le=30, strict=True)
     context_target_ratio: float = Field(default=0.9, ge=0.5, le=0.95, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def full_access_execution(self):
+        if self.approval_mode == "full_access" and self.sandbox_profile != "native_scoped":
+            raise ValueError("完全开放权限需要本机执行模式。")
+        return self
 
 
 class RunOptionOverrides(Command):

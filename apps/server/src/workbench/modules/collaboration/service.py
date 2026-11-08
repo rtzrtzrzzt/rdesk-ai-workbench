@@ -19,7 +19,7 @@ from workbench.modules.runs.domain import TERMINAL_STATUSES, Attempt, Job, Run, 
 from workbench.modules.runs.ownership import assert_owned, current_owner
 from workbench.modules.runs.service import emit, get, idempotent, set_status, view
 from workbench.modules.tools.domain import Operation
-from workbench.modules.tools.filesystem import authorized_path
+from workbench.modules.tools.filesystem import authorized_path, display_path
 from workbench.modules.tools.registry import TOOLS
 from workbench.modules.workspaces import Workspace
 
@@ -200,7 +200,7 @@ def spawn(run_id: str, operation_id: str, values: dict) -> dict:
         workspace = db.get(Workspace, root.workspace_id)
         base = Path(workspace.root_path).resolve()
         paths = sorted(
-            {authorized_path(base, item).relative_to(base).as_posix() for item in values["paths"]}
+            {display_path(base, authorized_path(base, item)) for item in values["paths"]}
         )
         model_id = values.get("model_connection_id") or root.model_connection_id
         from workbench.modules.access.service import scope_for_run

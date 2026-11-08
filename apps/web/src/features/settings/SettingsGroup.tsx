@@ -18,6 +18,7 @@ export function SettingsPanel({
   description,
   active,
   onAttentionChange,
+  back,
   children,
 }: {
   id: string
@@ -25,6 +26,7 @@ export function SettingsPanel({
   description: string
   active: boolean
   onAttentionChange: (id: string, attention: boolean) => void
+  back?: { label: string; onClick: () => void }
   children: ReactNode
 }) {
   const [attention, setAttention] = useState<Record<string, string>>({})
@@ -51,7 +53,14 @@ export function SettingsPanel({
       hidden={!active}
     >
       <div className="settings-panel-heading">
-        <h2 id={`settings-${id}-title`}>{title}</h2>
+        {back && (
+          <button type="button" className="settings-back" onClick={back.onClick}>
+            ← {back.label}
+          </button>
+        )}
+        <h2 id={`settings-${id}-title`} tabIndex={-1}>
+          {title}
+        </h2>
         <p>{description}</p>
       </div>
       {needsAttention && (
@@ -60,6 +69,7 @@ export function SettingsPanel({
         </p>
       )}
       <div className="settings-panel-content">
+        {/* Keep recovery notices, drafts and one-time credentials alive across navigation. */}
         <AttentionContext.Provider value={report}>{children}</AttentionContext.Provider>
       </div>
     </section>

@@ -57,6 +57,15 @@ DEFAULT_TOOLS = [
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
 
 
+PUBLIC_APPROVAL_MODES = ("smart", "manual")
+
+
+def public_runtime_options_schema():
+    schema = RunOptions.model_json_schema()
+    schema["properties"]["approval_mode"]["enum"] = list(PUBLIC_APPROVAL_MODES)
+    return schema
+
+
 class Definition(Command):
     model_connection_id: UUID
     allowed_tools: list[str] = Field(default_factory=lambda: list(DEFAULT_TOOLS), max_length=64)
@@ -64,6 +73,13 @@ class Definition(Command):
     runtime_options: RunOptions = Field(default_factory=lambda: RunOptions(child_agent_limit=0))
     source_workspace_id: UUID | None = None
     source_paths: list[str] = Field(default_factory=list, max_length=64)
+
+    @field_validator("runtime_options")
+    @classmethod
+    def scoped_execution_only(cls, value):
+        if value.approval_mode not in PUBLIC_APPROVAL_MODES:
+            raise ValueError("对外 Agent API 不能发布主机完全开放权限。")
+        return value
 
     @field_validator("allowed_tools")
     @classmethod

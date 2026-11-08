@@ -67,6 +67,119 @@
   font-size: 12px;
   line-height: 1.7;
 }
+.settings-back {
+  display: inline-flex;
+  margin: 0 0 18px;
+  padding: 2px 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+.settings-back:hover {
+  color: var(--fg);
+}
+.settings-entries {
+  margin-top: 20px;
+}
+.settings-entry {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 18px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  color: var(--fg);
+  background: transparent;
+  cursor: pointer;
+}
+.settings-entry:hover {
+  background: var(--hover);
+}
+.settings-entry > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.settings-entry > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+}
+.settings-entry strong,
+.settings-entry small {
+  display: block;
+  line-height: 1.7;
+}
+.settings-entry strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+.settings-entry small {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.settings-back:focus-visible,
+.settings-entry:focus-visible,
+.settings-disclosure > summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+  border-radius: 5px;
+}
+.settings-disclosure {
+  min-width: 0;
+  margin: 8px 0;
+}
+.settings-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  list-style: none;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.settings-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.settings-disclosure > summary > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.settings-disclosure[open] > summary > svg {
+  transform: rotate(90deg);
+}
+.settings-disclosure > summary > small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+.settings-disclosure-content {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 4px 0 16px;
+}
+.settings-disclosure-content > label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.settings-connections > .page-heading {
+  margin-top: 24px;
+}
+.settings-connections > .page-heading h1 {
+  font-size: 15px;
+}
+.settings-connections > .section-card {
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
 .settings-preference {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

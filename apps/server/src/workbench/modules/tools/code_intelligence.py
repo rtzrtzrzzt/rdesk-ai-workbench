@@ -336,7 +336,7 @@ def _location(root: Path, uri: str, span: dict) -> dict | None:
     except AppError:
         return None
     return {
-        "path": str(path.relative_to(root)),
+        "path": filesystem.display_path(root, path),
         "range": {
             part: {"line": span[part]["line"] + 1, "column": span[part]["character"] + 1}
             for part in ("start", "end")

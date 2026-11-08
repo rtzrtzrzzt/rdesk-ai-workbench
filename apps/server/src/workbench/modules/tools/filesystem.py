@@ -29,35 +29,42 @@ EXCLUDED = frozenset(
 )
 
 
+def display_path(root: Path, path: Path) -> str:
+    """Keep workspace paths stable; represent explicitly granted host paths absolutely."""
+    root, path = root.resolve(), path.resolve()
+    return path.relative_to(root).as_posix() if path.is_relative_to(root) else path.as_posix()
+
+
 def authorized_path(root: Path, value: str) -> Path:
+    from workbench.contracts.execution import current_scope
+    from workbench.modules.tools.authority import current_file_authority
+
     root = root.resolve()
     lexical = Path(os.path.abspath(root / value))
-    if lexical.is_relative_to(root) and any(
-        part in EXCLUDED or part == ".env" or part.startswith(".env.")
-        for part in lexical.relative_to(root).parts
-    ):
-        raise AppError(
-            "protected_path", "该路径包含受保护的运行数据、凭据或版本管理内容。", 403, "policy"
-        )
     candidate = (root / value).resolve()
-    if not candidate.is_relative_to(root.resolve()):
+    scope = current_scope.get()
+    authority = current_file_authority.get()
+    host_access = bool(
+        authority and authority.root == root and authority.host_access and scope is None
+    )
+    for path in (lexical, candidate):
+        parts = path.relative_to(root).parts if path.is_relative_to(root) else path.parts
+        if any(part in EXCLUDED or part == ".env" or part.startswith(".env.") for part in parts):
+            raise AppError(
+                "protected_path", "该路径包含受保护的运行数据、凭据或版本管理内容。", 403, "policy"
+            )
+    if not candidate.is_relative_to(root) and not host_access:
         raise AppError("path_not_allowed", "目标位于当前工作区之外。", 403, "policy")
-    relative = candidate.relative_to(root.resolve())
-    if any(
-        part in EXCLUDED or part == ".env" or part.startswith(".env.") for part in relative.parts
-    ):
-        raise AppError(
-            "protected_path", "该路径包含受保护的运行数据、凭据或版本管理内容。", 403, "policy"
-        )
     for protected in (get_settings().data_dir.resolve(), (PROJECT_ROOT / "models").resolve()):
         if candidate == protected or candidate.is_relative_to(protected):
             raise AppError(
                 "protected_path", "不能通过任务工具访问工作台凭据或模型权重。", 403, "policy"
             )
-    from workbench.contracts.execution import current_scope
-
-    scope = current_scope.get()
-    if scope and relative.parts and relative.parts[0] == "_sources":
+    if authority and authority.root == root and authority.allowed_paths is not None:
+        if not any(candidate.is_relative_to(path) for path in authority.allowed_paths):
+            raise AppError("agent_path_scope", "此路径不在子任务允许的文件范围。", 403, "policy")
+    relative = candidate.relative_to(root) if candidate.is_relative_to(root) else None
+    if scope and relative and relative.parts and relative.parts[0] == "_sources":
         parts = relative.parts
         permitted = len(parts) == 1 or (
             len(parts) >= 2 and scope.source_revision and parts[1] == scope.source_revision
@@ -180,7 +187,7 @@ def read_file(root: Path, values: dict) -> dict:
             max_chars=budget,
         )
     return {
-        "path": str(path.relative_to(root)),
+        "path": display_path(root, path),
         "content": "\n".join(chunks),
         "version": version,
         "total_lines": len(lines),
@@ -270,7 +277,7 @@ def change_file(
     finally:
         Path(temporary).unlink(missing_ok=True)
     result = {
-        "path": str(path.relative_to(root)),
+        "path": display_path(root, path),
         "previous_version": version,
         "version": hashlib.sha256(encoded).hexdigest(),
         "bytes": len(encoded),
